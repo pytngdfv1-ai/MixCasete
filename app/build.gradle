@@ -1,5 +1,5 @@
 plugins {
-    id 'com.android.application' version '8.5.2'
+    id 'com.android.application'
 }
 
 android {
@@ -15,7 +15,9 @@ android {
     }
 
     buildTypes {
-        release { minifyEnabled false }
+        release {
+            minifyEnabled false
+        }
     }
 
     compileOptions {
@@ -24,12 +26,5 @@ android {
     }
 }
 
-dependencies { }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
+dependencies {
 }
-
-dependencies { }
