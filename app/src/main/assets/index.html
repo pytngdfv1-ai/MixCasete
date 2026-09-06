@@ -55,7 +55,7 @@
     width: 15px; height: 40px;
     background: repeating-linear-gradient(180deg, #d8d8d8 0 3px, #9a9a9a 3px 5px);
     border-radius: 2px 5px 5px 2px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.7);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,0.7);
   }
 
   .side-grille {
@@ -386,6 +386,19 @@
     font-size: 9px; padding: 0 6px;
     box-shadow: inset 0 1px 1px rgba(255,255,255,0.5);
   }
+
+  /* Botón flotante de sonido */
+  .sound-fab {
+    position: fixed; right: 18px; bottom: 18px; z-index: 400;
+    width: 58px; height: 58px; border-radius: 50%;
+    border: 2px solid #b3770a;
+    background: linear-gradient(180deg, #f7a929 0%, #e78d10 100%);
+    font-size: 24px;
+    display: none;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+    cursor: pointer;
+  }
+  .sound-fab.show { display: block; animation: blink 1s infinite; }
 
   .search-overlay, .playlist-overlay {
     position: fixed; inset: 0; z-index: 100;
@@ -733,6 +746,8 @@
   </div>
 </div>
 
+<button class="sound-fab" id="soundFab">🔊</button>
+
 <div class="search-overlay" id="searchOverlay">
   <div class="search-panel">
     <div class="panel-handle"></div>
@@ -778,6 +793,8 @@
 <div id="ytMount" style="position:absolute;width:1px;height:1px;opacity:0.01;pointer-events:none;overflow:hidden;"></div>
 
 <script>
+const IS_ANDROID = /Android/i.test(navigator.userAgent);
+
 /* ============ COVER FULLSCREEN + ZOOM ============ */
 const coverOverlay = document.getElementById('coverOverlay');
 const coverFullImg = document.getElementById('coverFullImg');
@@ -916,9 +933,8 @@ document.getElementById('plOpen').onclick = () => { renderPL(); plOverlay.classL
 plOverlay.onclick = e => { if (e.target === plOverlay) plOverlay.classList.remove('open'); };
 function closePL() { plOverlay.classList.remove('open'); }
 
-/* ---- Títulos: DOM separado de datos (la playlist nunca guarda basura) ---- */
 let flashTimer = null;
-function showTitle(t) { titleEl.textContent = t; }              /* solo pantalla */
+function showTitle(t) { titleEl.textContent = t; }
 function setRealTitle(t) { if (t) { current.title = t; titleEl.textContent = t; } }
 function flashTitle(msg) {
   showTitle(msg);
@@ -941,7 +957,7 @@ function recToPlaylist() {
 
 /* ============ RED ============ */
 const PIPED_INSTANCES = ['https://pipedapi.kavin.rocks', 'https://api.piped.private.coffee'];
-const INVIDIOUS_INSTANCES = ['https://inv.nadeko.net', 'https://invidious.f5.si'];
+const INVIDIOUS_INSTANCES = ['https://inv.nadeko.net', 'https://invidious.f5.si', 'https://iv.melmac.space', 'https://invidious.private.coffee'];
 const PROXIES = [
   u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
   u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u)
@@ -955,12 +971,24 @@ const titleEl = document.getElementById('trackTitle');
 const albumImg = document.getElementById('albumImg');
 const artistBrand = document.getElementById('artistBrand');
 const modeLed = document.getElementById('modeLed');
+const soundFab = document.getElementById('soundFab');
 
 let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
 
-/* ---- MODO EMBED ---- */
-let embedFrame = null, embedPos = 0, embedTimer = null, muteHintShown = false;
+/* ---- Botón flotante de sonido ---- */
+soundFab.onclick = () => {
+  if (mode === 'embed') {
+    embedCmd('unMute'); embedCmd('setVolume', [100]); embedCmd('playVideo');
+    setReels(true);
+  } else if (mode === 'stream') {
+    audio.play().catch(() => {});
+  }
+  soundFab.classList.remove('show');
+};
+
+/* ---- MODO EMBED + ráfaga unmute ---- */
+let embedFrame = null, embedPos = 0, embedTimer = null, unmuteBurst = null;
 
 function ensureEmbed() {
   if (embedFrame) return embedFrame;
@@ -990,8 +1018,17 @@ function embedLoad(id, autoplay) {
   embedPos = 0;
   f.src = 'https://www.youtube.com/embed/' + id +
     '?enablejsapi=1&playsinline=1&rel=0&mute=0' + (autoplay ? '&autoplay=1' : '');
-  if (autoplay) startEmbedClock();
+  if (autoplay) { startEmbedClock(); startUnmuteBurst(); }
 }
+function startUnmuteBurst() {
+  stopUnmuteBurst();
+  let n = 0;
+  unmuteBurst = setInterval(() => {
+    embedCmd('unMute'); embedCmd('setVolume', [100]);
+    if (++n > 10) stopUnmuteBurst();
+  }, 600);
+}
+function stopUnmuteBurst() { if (unmuteBurst) { clearInterval(unmuteBurst); unmuteBurst = null; } }
 function startEmbedClock() {
   stopEmbedClock();
   embedTimer = setInterval(() => { embedPos++; }, 1000);
@@ -1136,7 +1173,7 @@ async function enrichMeta(id, fallbackTitle) {
   return { title: finalTitle, author: finalAuthor };
 }
 
-/* ============ FUENTES DE BÚSQUEDA ============ */
+/* ============ BÚSQUEDA ============ */
 async function pipedSearch(q) {
   for (const base of PIPED_INSTANCES) {
     try {
@@ -1237,16 +1274,12 @@ async function searchMusic(q) {
   }
 }
 
-/* ============ FUENTES DE AUDIO ============ */
+/* ============ AUDIO ============ */
 async function pipedStream(id) {
   for (const base of PIPED_INSTANCES) {
     try {
       const j = await (await fetchSmart(base + '/streams/' + id, 5000)).json();
-      const a = (j.audioStreams || []).filter(s => s.url).sort((x, y) => (y.bitrate || 0) - (x.bitrate || 0));
-      if (a.length) {
-        const pick = a.find(s => /mp4|m4a/i.test(s.mimeType || '')) || a[0];
-        return { url: pick.url, title: j.title, author: j.uploader || '', thumb: j.thumbnail };
-      }
+      return pickFormats(j, id);
     } catch (e) {}
   }
   return null;
@@ -1255,49 +1288,63 @@ async function invidiousStream(id) {
   for (const base of INVIDIOUS_INSTANCES) {
     try {
       const j = await (await fetchSmart(base + '/api/v1/videos/' + id, 5000)).json();
-      return pickFormats(j, id);
-    } catch (e) {}
-  }
-  return null;
-}
-/* NUEVO: Invidious vía Jina (CORS abierto) → audio nativo con volumen propio */
-function extractJson(txt) {
-  const a = txt.indexOf('{');
-  const b = txt.lastIndexOf('}');
-  if (a === -1 || b === -1 || b <= a) return null;
-  try { return JSON.parse(txt.slice(a, b + 1)); } catch (e) { return null; }
-}
-function pickFormats(j, id) {
-  if (!j) return null;
-  const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
-  const aud = (j.adaptiveFormats || []).filter(f => (f.type || '').startsWith('audio') && f.url)
-    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-  if (aud.length) return { url: aud[0].url, title: j.title, author: j.author || '', thumb };
-  const prog = (j.formatStreams || []).find(f => f.url);
-  if (prog) return { url: prog.url, title: j.title, author: j.author || '', thumb };
-  return null;
-}
-async function jinaStream(id) {
-  for (const base of INVIDIOUS_INSTANCES) {
-    try {
-      const r = await fetchTimeout('https://r.jina.ai/' + base + '/api/v1/videos/' + id, 12000);
-      if (!r.ok) continue;
-      const j = extractJson(await r.text());
       const out = pickFormats(j, id);
       if (out) return out;
     } catch (e) {}
   }
   return null;
 }
+function extractJson(txt) {
+  const a = txt.indexOf('{');
+  const b = txt.lastIndexOf('}');
+  if (a === -1 || b === -1 || b <= a) return null;
+  try { return JSON.parse(txt.slice(a, b + 1)); } catch (e) { return null; }
+}
+/* Unificado: Piped (audioStreams) + Invidious (adaptiveFormats) */
+function pickFormats(j, id) {
+  if (!j) return null;
+  const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
+  const aud = (j.audioStreams || j.adaptiveFormats || [])
+    .filter(f => f.url && ((f.mimeType || f.type || '').startsWith('audio')))
+    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  if (aud.length) return { url: aud[0].url, title: j.title, author: j.author || j.uploader || '', thumb };
+  const prog = (j.formatStreams || []).find(f => f.url);
+  if (prog) return { url: prog.url, title: j.title, author: j.author || j.uploader || '', thumb };
+  return null;
+}
+/* Piped + Invidious vía Jina (CORS abierto siempre) */
+async function jinaStream(id) {
+  const all = INVIDIOUS_INSTANCES.map(b => ({ b, p: '/api/v1/videos/' }))
+    .concat(PIPED_INSTANCES.map(b => ({ b, p: '/streams/' })));
+  for (const { b, p } of all) {
+    try {
+      const r = await fetchTimeout('https://r.jina.ai/' + b + p + id, 12000);
+      if (!r.ok) continue;
+      const out = pickFormats(extractJson(await r.text()), id);
+      if (out) return out;
+    } catch (e) {}
+  }
+  return null;
+}
 
-/* ============ REPRODUCCIÓN ============ */
+function raceStreams(id, ms) {
+  return withTimeout(
+    anyPromise([pipedStream(id), invidiousStream(id), jinaStream(id)]
+      .map(p => p.then(r => { if (!r) throw new Error('x'); return r; }))),
+    ms
+  ).catch(() => null);
+}
+
 function startStream(url, title, src) {
+  soundFab.classList.remove('show');
+  stopUnmuteBurst();
   audio.src = url;
   mode = 'stream'; setLed('stream');
-  setRealTitle(title || src?.title);
+  setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
   audio.play().catch(() => {
     flashTitle('🔊 Autoplay bloqueado: pulsa ▶');
+    soundFab.classList.add('show');
   });
 }
 
@@ -1322,24 +1369,24 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 2) carrera de streams (Piped ∥ Invidious ∥ Invidious-vía-Jina) */
-  const srcPromise = withTimeout(
-    anyPromise([pipedStream(id), invidiousStream(id), jinaStream(id)]
-      .map(p => p.then(r => { if (!r) throw new Error('x'); return r; }))),
-    8000
-  ).catch(() => null);
-
   if (location.protocol === 'file:') {
-    /* embed inmediato como colchón (suena si el stream no llega) */
+    /* ANDROID: audio nativo PRIMERO (fetch directo permitido en WebView) */
+    if (IS_ANDROID) {
+      const src = await raceStreams(id, 5000);
+      if (my !== playToken) return;
+      if (src) {
+        cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
+        startStream(src.url, src.title || title, src);
+        return;
+      }
+    }
+    /* embed como colchón */
     mode = 'embed'; setLed('embed');
     embedLoad(id, true);
     setReels(true);
-    if (!muteHintShown) {
-      muteHintShown = true;
-      setTimeout(() => { if (mode === 'embed') flashTitle('🔊 Si no suena: pulsa ▶ una vez'); }, 3000);
-    }
+    setTimeout(() => { if (my === playToken && mode === 'embed') soundFab.classList.add('show'); }, 3000);
     enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
-    srcPromise.then(src => {
+    raceStreams(id, 8000).then(src => {
       if (!src || my !== playToken) return;
       cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
       if (mode === 'embed' || mode === 'stream') {
@@ -1350,8 +1397,8 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 3) http */
-  const src = await srcPromise;
+  /* http */
+  const src = await raceStreams(id, 6500);
   if (src) {
     cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
     startStream(src.url, src.title || title, src);
@@ -1405,6 +1452,7 @@ function doPlay() {
     if (embedFrame && embedFrame.src && embedFrame.src !== 'about:blank') {
       embedCmd('playVideo'); setReels(true); startEmbedClock();
     } else if (current.id) { embedLoad(current.id, true); setReels(true); }
+    soundFab.classList.remove('show');
   }
   else if (mode === 'iframe') ytPlayer && ytPlayer.playVideo();
 }
@@ -1418,6 +1466,7 @@ function doStop() {
   else if (mode === 'embed') { embedCmd('stopVideo'); setReels(false); stopEmbedClock(); }
   else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
   setReels(false);
+  soundFab.classList.remove('show');
 }
 function doSeek(delta) {
   if (mode === 'stream') {
