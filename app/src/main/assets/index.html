@@ -968,8 +968,6 @@ function recToPlaylist() {
 }
 
 /* ============ RED ============ */
-const PIPED_INSTANCES = ['https://pipedapi.kavin.rocks', 'https://api.piped.private.coffee'];
-const INVIDIOUS_INSTANCES = ['https://inv.nadeko.net', 'https://invidious.f5.si', 'https://iv.melmac.space', 'https://invidious.private.coffee'];
 const PROXIES = [
   u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
   u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u)
@@ -1118,21 +1116,45 @@ function extractVideoId(str) {
   return m ? m[1] : null;
 }
 
-/* ============ 🎯 FUENTE NATIVA: YouTube youtubei/v1/player (client ANDROID) ============ */
+/* ============ 🌐 LISTAS DE INSTANCIAS VIVAS (uptime oficial) ============ */
+let listsPromise = null;
+function loadLists() {
+  if (listsPromise) return listsPromise;
+  listsPromise = (async () => {
+    let piped = ['https://pipedapi.kavin.rocks', 'https://api.piped.private.coffee'];
+    let inv = ['https://inv.nadeko.net', 'https://invidious.f5.si'];
+    try {
+      const r = await fetchSmart('https://piped-instances.kavin.rocks/', 5000);
+      const j = await r.json();
+      const apis = (Array.isArray(j) ? j : []).map(x => x.api_url).filter(Boolean);
+      if (apis.length) piped = apis;
+    } catch (e) { debug('Lista Piped no cargó'); }
+    try {
+      const r = await fetchSmart('https://api.invidious.io/instances.json?sort_by=health', 5000);
+      const j = await r.json();
+      const apis = (Array.isArray(j) ? j : [])
+        .filter(x => x && x[1] && x[1].api && x[1].cors !== false)
+        .map(x => 'https://' + x[0]);
+      if (apis.length) inv = apis;
+    } catch (e) { debug('Lista Invidious no cargó'); }
+    debug('Instancias vivas: ' + piped.length + ' Piped · ' + inv.length + ' Invidious');
+    return { piped, inv };
+  })();
+  return listsPromise;
+}
+
+/* ============ 🎯 FUENTE NATIVA YouTube (client ANDROID) ============ */
 const YT_CLIENTS = [
   { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
     userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
   { clientName: 'ANDROID_MUSIC', clientVersion: '7.16.50', androidSdkVersion: 30,
-    userAgent: 'com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11; en_US) gzip' },
-  { clientName: 'ANDROID_CREATOR', clientVersion: '24.45.100', androidSdkVersion: 30,
-    userAgent: 'com.google.android.apps.youtube.creator/24.45.100 (Linux; U; Android 11; en_US) gzip' }
+    userAgent: 'com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11; en_US) gzip' }
 ];
 
 async function youtubeNativeStream(id) {
   for (const client of YT_CLIENTS) {
     try {
-      debug('Native: probando client ' + client.clientName + '...');
-      const r = await fetchTimeout('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', 9000, {
+      const r = await fetchTimeout('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', 8000, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'User-Agent': client.userAgent },
         body: JSON.stringify({
@@ -1142,27 +1164,25 @@ async function youtubeNativeStream(id) {
           params: '8AEB'
         })
       });
-      if (!r.ok) { debug('Native ' + client.clientName + ': HTTP ' + r.status); continue; }
+      if (!r.ok) continue;
       const j = await r.json();
       const sd = j?.streamingData || {};
       const all = [].concat(sd.formats || [], sd.adaptiveFormats || []);
       const cands = all
         .filter(f => f.url && /audio|mp4/.test(f.mimeType || ''))
         .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-      const pick = cands.find(f => /audio\/mp4/.test(f.mimeType || '')) ||
-                   cands.find(f => /audio/.test(f.mimeType || '')) ||
-                   cands[0];
+      const pick = cands.find(f => /audio\/mp4/.test(f.mimeType || '')) || cands[0];
       if (pick) {
         const vd = j.videoDetails || {};
-        const thumb = (vd.thumbnail?.thumbnails || []).slice(-1)[0]?.url ||
-                      ('https://i.ytimg.com/vi/' + id + '/hqdefault.jpg');
-        debug('Native OK: ' + client.clientName + ' → ' + (pick.itag || '?'));
-        return { url: pick.url, title: vd.title, author: vd.author || '', thumb };
+        return {
+          url: pick.url,
+          title: vd.title,
+          author: vd.author || '',
+          thumb: (vd.thumbnail?.thumbnails || []).slice(-1)[0]?.url ||
+                 ('https://i.ytimg.com/vi/' + id + '/hqdefault.jpg')
+        };
       }
-      debug('Native ' + client.clientName + ': sin URLs directas');
-    } catch (e) {
-      debug('Native ' + client.clientName + ' falló: ' + e.message);
-    }
+    } catch (e) {}
   }
   return null;
 }
@@ -1224,9 +1244,10 @@ async function enrichMeta(id, fallbackTitle) {
   return { title: finalTitle, author: finalAuthor };
 }
 
-/* ============ BÚSQUEDA ============ */
+/* ============ BÚSQUEDA (con instancias vivas) ============ */
 async function pipedSearch(q) {
-  for (const base of PIPED_INSTANCES) {
+  const { piped } = await loadLists();
+  for (const base of piped.slice(0, 3)) {
     try {
       const j = await (await fetchSmart(base + '/search?q=' + encodeURIComponent(q) + '&filter=music_songs', 5000)).json();
       const items = (j.items || []).filter(i => i.type === 'stream').slice(0, 15)
@@ -1238,7 +1259,8 @@ async function pipedSearch(q) {
   return null;
 }
 async function invidiousSearch(q) {
-  for (const base of INVIDIOUS_INSTANCES) {
+  const { inv } = await loadLists();
+  for (const base of inv.slice(0, 3)) {
     try {
       const j = await (await fetchSmart(base + '/api/v1/search?q=' + encodeURIComponent(q) + '&type=music', 5000)).json();
       const items = (Array.isArray(j) ? j : []).filter(i => i.type === 'video' && i.videoId).slice(0, 15)
@@ -1325,32 +1347,7 @@ async function searchMusic(q) {
   }
 }
 
-/* ============ FUENTES DE STREAM ============ */
-async function pipedStream(id) {
-  for (const base of PIPED_INSTANCES) {
-    try {
-      const j = await (await fetchSmart(base + '/streams/' + id, 5000)).json();
-      return pickFormats(j, id);
-    } catch (e) {}
-  }
-  return null;
-}
-async function invidiousStream(id) {
-  for (const base of INVIDIOUS_INSTANCES) {
-    try {
-      const j = await (await fetchSmart(base + '/api/v1/videos/' + id, 5000)).json();
-      const out = pickFormats(j, id);
-      if (out) return out;
-    } catch (e) {}
-  }
-  return null;
-}
-function extractJson(txt) {
-  const a = txt.indexOf('{');
-  const b = txt.lastIndexOf('}');
-  if (a === -1 || b === -1 || b <= a) return null;
-  try { return JSON.parse(txt.slice(a, b + 1)); } catch (e) { return null; }
-}
+/* ============ STREAMS (con instancias vivas) ============ */
 function pickFormats(j, id) {
   if (!j) return null;
   const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
@@ -1362,21 +1359,49 @@ function pickFormats(j, id) {
   if (prog) return { url: prog.url, title: j.title, author: j.author || j.uploader || '', thumb };
   return null;
 }
+async function pipedStream(id) {
+  const { piped } = await loadLists();
+  for (const base of piped.slice(0, 4)) {
+    try {
+      const j = await (await fetchSmart(base + '/streams/' + id, 5000)).json();
+      const out = pickFormats(j, id);
+      if (out) { debug('Stream vía Piped: ' + base.replace('https://', '')); return out; }
+    } catch (e) {}
+  }
+  return null;
+}
+async function invidiousStream(id) {
+  const { inv } = await loadLists();
+  for (const base of inv.slice(0, 4)) {
+    try {
+      const j = await (await fetchSmart(base + '/api/v1/videos/' + id, 5000)).json();
+      const out = pickFormats(j, id);
+      if (out) { debug('Stream vía Invidious: ' + base.replace('https://', '')); return out; }
+    } catch (e) {}
+  }
+  return null;
+}
+function extractJson(txt) {
+  const a = txt.indexOf('{');
+  const b = txt.lastIndexOf('}');
+  if (a === -1 || b === -1 || b <= a) return null;
+  try { return JSON.parse(txt.slice(a, b + 1)); } catch (e) { return null; }
+}
 async function jinaStream(id) {
-  const all = INVIDIOUS_INSTANCES.map(b => ({ b, p: '/api/v1/videos/' }))
-    .concat(PIPED_INSTANCES.map(b => ({ b, p: '/streams/' })));
+  const { piped, inv } = await loadLists();
+  const all = inv.slice(0, 2).map(b => ({ b, p: '/api/v1/videos/' }))
+    .concat(piped.slice(0, 2).map(b => ({ b, p: '/streams/' })));
   for (const { b, p } of all) {
     try {
-      const r = await fetchTimeout('https://r.jina.ai/' + b + p + id, 12000);
+      const r = await fetchTimeout('https://r.jina.ai/' + b + p + id, 10000);
       if (!r.ok) continue;
       const out = pickFormats(extractJson(await r.text()), id);
-      if (out) return out;
+      if (out) { debug('Stream vía Jina'); return out; }
     } catch (e) {}
   }
   return null;
 }
 
-/* NATIVA primero, luego el resto */
 function raceStreams(id, ms) {
   return withTimeout(
     anyPromise([youtubeNativeStream(id), pipedStream(id), invidiousStream(id), jinaStream(id)]
@@ -1392,7 +1417,7 @@ function startStream(url, title, src) {
   setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
   audio.play().then(() => {
-    debug('🔊 SONANDO (stream nativo)');
+    debug('🔊 SONANDO');
   }).catch(() => {
     debug('Autoplay bloqueado: pulsa ▶');
     soundFab.classList.add('show');
@@ -1416,14 +1441,14 @@ async function playById(id, title, thumb, author) {
 
   /* 1) cache fresco */
   if (c && c.s && Date.now() - (c.t || 0) < STREAM_TTL) {
-    debug('Usando stream en cache');
+    debug('Stream desde cache');
     startStream(c.s, c.title || title, c);
     return;
   }
 
-  /* 2) carrera de streams (NATIVA YouTube primero) */
-  debug('Buscando stream...');
-  const src = await raceStreams(id, 10000);
+  /* 2) carrera de streams */
+  debug('Buscando stream (instancias vivas)...');
+  const src = await raceStreams(id, 12000);
   if (my !== playToken) return;
 
   if (src) {
@@ -1432,7 +1457,7 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 3) embed como último recurso */
+  /* 3) embed último recurso */
   debug('Sin stream → embed fallback');
   mode = 'embed'; setLed('embed');
   embedLoad(id, true);
