@@ -159,7 +159,6 @@ public class MainActivity extends Activity {
         return null;
     }
 
-    /* YouTube innertube directo */
     private String innertube(String id, String clientJson, String ua) {
         try {
             HttpURLConnection c = (HttpURLConnection) new URL(
@@ -183,17 +182,18 @@ public class MainActivity extends Activity {
             int best = -1;
             JSONArray ad = sd.optJSONArray("adaptiveFormats");
             if (ad != null) for (int i = 0; i < ad.length(); i++) {
-                JSONObject f = ad.getJSONObject(i);
+                JSONObject f = ad.optJSONObject(i);
+                if (f == null) continue;
                 if (f.has("url") && f.optString("mimeType", "").startsWith("audio/mp4")) {
                     int br = f.optInt("bitrate", 0);
-                    if (br > best) { best = br; url = f.getString("url"); }
+                    if (br > best) { best = br; url = f.optString("url"); }
                 }
             }
             if (url == null) {
                 JSONArray fm = sd.optJSONArray("formats");
                 if (fm != null) for (int i = 0; i < fm.length(); i++) {
-                    JSONObject f = fm.getJSONObject(i);
-                    if (f.has("url")) { url = f.getString("url"); break; }
+                    JSONObject f = fm.optJSONObject(i);
+                    if (f != null && f.has("url")) { url = f.optString("url"); break; }
                 }
             }
             if (url == null) return null;
@@ -206,14 +206,15 @@ public class MainActivity extends Activity {
         } catch (Exception e) { return null; }
     }
 
-    /* Invidious + Piped desde Java (sin CORS → todas las instancias sirven) */
     private String fromInstances(String id) {
         try {
             JSONArray arr = new JSONArray(httpGet("https://api.invidious.io/instances.json?sort_by=health"));
             int tried = 0;
             for (int i = 0; i < arr.length() && tried < 6; i++) {
-                String host = arr.getJSONArray(i).optString(0);
-                JSONObject meta = arr.getJSONArray(i).optJSONObject(1);
+                JSONArray entry = arr.optJSONArray(i);
+                if (entry == null) continue;
+                String host = entry.optString(0, "");
+                JSONObject meta = entry.optJSONObject(1);
                 if (host.isEmpty() || meta == null || !meta.optBoolean("api", false)) continue;
                 tried++;
                 try {
@@ -231,7 +232,9 @@ public class MainActivity extends Activity {
             JSONArray arr = new JSONArray(httpGet("https://piped-instances.kavin.rocks/"));
             int tried = 0;
             for (int i = 0; i < arr.length() && tried < 6; i++) {
-                String api = arr.getJSONObject(i).optString("api_url", "");
+                JSONObject inst = arr.optJSONObject(i);
+                if (inst == null) continue;
+                String api = inst.optString("api_url", "");
                 if (api.isEmpty()) continue;
                 tried++;
                 try {
@@ -253,7 +256,8 @@ public class MainActivity extends Activity {
         JSONArray ad = v.optJSONArray("adaptiveFormats");
         if (ad != null) {
             for (int i = 0; i < ad.length(); i++) {
-                JSONObject f = ad.getJSONObject(i);
+                JSONObject f = ad.optJSONObject(i);
+                if (f == null) continue;
                 String t = f.optString("type", "");
                 String u = f.optString("url", "");
                 if (u.isEmpty()) continue;
@@ -265,9 +269,12 @@ public class MainActivity extends Activity {
         if (fallback != null) return fallback;
         JSONArray fs = v.optJSONArray("formatStreams");
         if (fs != null && fs.length() > 0) {
-            String u = fs.getJSONObject(0).optString("url", "");
-            if (u.startsWith("/")) u = "https://" + host + u;
-            if (!u.isEmpty()) return u;
+            JSONObject f0 = fs.optJSONObject(0);
+            if (f0 != null) {
+                String u = f0.optString("url", "");
+                if (u.startsWith("/")) u = "https://" + host + u;
+                if (!u.isEmpty()) return u;
+            }
         }
         return null;
     }
@@ -277,7 +284,8 @@ public class MainActivity extends Activity {
         String best = null;
         int bestBr = -1;
         if (as != null) for (int i = 0; i < as.length(); i++) {
-            JSONObject f = as.getJSONObject(i);
+            JSONObject f = as.optJSONObject(i);
+            if (f == null) continue;
             String u = f.optString("url", "");
             if (u.isEmpty()) continue;
             int br = f.optInt("bitrate", 0);
