@@ -803,7 +803,7 @@
 
 <script>
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
-const HAS_BRIDGE = typeof Android !== 'undefined';   /* WebView de fondo en Java */
+const HAS_BRIDGE = typeof Android !== 'undefined';
 
 /* ============ DEBUG ============ */
 const debugEl = document.getElementById('debugIndicator');
@@ -812,6 +812,26 @@ function debug(msg) {
   debugEl.classList.add('show');
   console.log('[DEBUG]', msg);
 }
+
+/* ============ STREAM VÍA JAVA (sin CORS) ============ */
+function bridgeGetStream(id) {
+  return new Promise(res => {
+    let done = false;
+    window.__streamCb = j => { if (!done) { done = true; res(j); } };
+    try { Android.getStream(id); } catch (e) { res(null); }
+    setTimeout(() => { if (!done) { done = true; res(null); } }, 9000);
+  });
+}
+
+/* ============ DESCARGA LOCAL ============ */
+window.onDownloaded = function (id, path) {
+  const item = playlist.find(t => t.id === id);
+  if (item) {
+    if (path) { item.local = path; flashTitle('💾 Tema guardado en el teléfono'); }
+    else flashTitle('⚠ No se pudo descargar');
+    savePL();
+  }
+};
 
 /* ============ COVER FULLSCREEN + ZOOM ============ */
 const coverOverlay = document.getElementById('coverOverlay');
@@ -906,7 +926,7 @@ function updatePlBar() {
 function renderPL() {
   const list = document.getElementById('plList');
   if (!playlist.length) {
-    list.innerHTML = '<div class="result-status">Playlist vacía.<br>Pon música y pulsa ● REC para grabar temas aquí 🎙️</div>';
+    list.innerHTML = '<div class="result-status">Playlist vacía.<br>Pon música y pulsa ● REC para grabar y descargar temas 🎙️</div>';
     return;
   }
   list.innerHTML = '';
@@ -916,7 +936,7 @@ function renderPL() {
     div.innerHTML =
       '<img src="' + (t.thumb || ('https://i.ytimg.com/vi/' + t.id + '/hqdefault.jpg')) + '">' +
       '<div class="pl-info">' +
-        '<div class="pl-title">' + t.title + '</div>' +
+        '<div class="pl-title">' + t.title + (t.local ? ' 💾' : '') + '</div>' +
         '<div class="pl-author">' + (t.author || 'YouTube') + '</div>' +
       '</div>' +
       '<div class="pl-actions">' +
@@ -966,6 +986,10 @@ function recToPlaylist() {
   dot.classList.add('on'); setTimeout(() => dot.classList.remove('on'), 1400);
   flashTitle('● REC → tema guardado ✔');
   if (navigator.vibrate) navigator.vibrate([40, 60, 40]);
+  /* Descarga local del audio */
+  if (HAS_BRIDGE) {
+    try { Android.downloadYT(current.id, current.title); flashTitle('⏬ Descargando tema...'); } catch (e) {}
+  }
 }
 
 /* ============ RED ============ */
@@ -988,7 +1012,7 @@ let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
 let embedFrame = null, embedPos = 0, embedTimer = null;
 
-/* ---- Estado reportado por el WebView de fondo (Java) ---- */
+/* ---- Estado del WebView de fondo ---- */
 window.onBridgeState = function (s) {
   if (mode !== 'bridge') return;
   if (!s) return;
@@ -999,7 +1023,7 @@ window.onBridgeState = function (s) {
   embedPos = Math.floor(d.t || 0);
 };
 
-/* ---- FALLBACK unificado: bridge (Android) o iframe (escritorio) ---- */
+/* ---- FALLBACK unificado ---- */
 function fbLoad(id) {
   if (HAS_BRIDGE) {
     mode = 'bridge';
@@ -1025,7 +1049,7 @@ soundFab.onclick = () => {
   soundFab.classList.remove('show');
 };
 
-/* ---- iframe embed (solo escritorio) ---- */
+/* ---- iframe embed (escritorio) ---- */
 function ensureEmbed() {
   if (embedFrame) return embedFrame;
   const f = document.createElement('iframe');
@@ -1170,7 +1194,7 @@ function loadLists() {
   return listsPromise;
 }
 
-/* ============ FUENTE NATIVA YouTube ============ */
+/* ============ FUENTE NATIVA WEB (respaldo escritorio) ============ */
 const YT_CLIENTS = [
   { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
     userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
@@ -1374,7 +1398,7 @@ async function searchMusic(q) {
   }
 }
 
-/* ============ STREAMS ============ */
+/* ============ STREAMS WEB (respaldo) ============ */
 function pickFormats(j, id) {
   if (!j) return null;
   const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
@@ -1444,7 +1468,7 @@ function startStream(url, title, src) {
   setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
   audio.play().then(() => {
-    debug('🔊 SONANDO (stream)');
+    debug('🔊 SONANDO');
   }).catch(() => {
     debug('Autoplay bloqueado: pulsa ▶');
     soundFab.classList.add('show');
@@ -1466,15 +1490,35 @@ async function playById(id, title, thumb, author) {
   } else if (thumb) { albumImg.src = thumb; }
   setCoverHQ(id, title || (c && c.title) || '');
 
-  /* 1) cache fresco */
+  /* 1) archivo LOCAL descargado → sonido garantizado, incluso offline */
+  const localItem = playlist.find(t => t.id === id);
+  if (localItem && localItem.local) {
+    debug('Reproduciendo desde almacenamiento local 💾');
+    startStream('file://' + localItem.local, localItem.title || title, localItem);
+    return;
+  }
+
+  /* 2) cache fresco */
   if (c && c.s && Date.now() - (c.t || 0) < STREAM_TTL) {
     debug('Stream desde cache');
     startStream(c.s, c.title || title, c);
     return;
   }
 
-  /* 2) carrera de streams */
-  debug('Buscando stream...');
+  /* 3) extracción NATIVA Java (sin CORS) */
+  if (HAS_BRIDGE) {
+    debug('Java: extrayendo audio de YouTube...');
+    const s = await bridgeGetStream(id);
+    if (my !== playToken) return;
+    if (s && s.url) {
+      cacheSet(id, { s: s.url, title: s.title || title, author: s.author || '' });
+      startStream(s.url, s.title || title, s);
+      return;
+    }
+  }
+
+  /* 4) carrera de streams web */
+  debug('Buscando stream web...');
   const src = await raceStreams(id, 12000);
   if (my !== playToken) return;
 
@@ -1484,7 +1528,7 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 3) FALLBACK: WebView de fondo (Android) o iframe (escritorio) */
+  /* 5) FALLBACK: WebView de fondo / iframe */
   debug('Sin stream → reproductor de fondo');
   fbLoad(id);
   setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
@@ -1549,8 +1593,7 @@ function doSeek(delta) {
   if (mode === 'stream') {
     audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + delta));
   } else if (mode === 'bridge' || mode === 'embed') {
-    const s = Math.max(0, embedPos + delta);
-    fbSeek(s);
+    fbSeek(Math.max(0, embedPos + delta));
   } else if (mode === 'iframe' && ytPlayer && ytPlayer.getCurrentTime) {
     ytPlayer.seekTo(Math.max(0, ytPlayer.getCurrentTime() + delta), true);
   }
