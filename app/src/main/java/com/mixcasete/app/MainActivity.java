@@ -51,8 +51,8 @@ public class MainActivity extends Activity {
         /* Detecta qué motor WebView está usando el sistema */
         String provider = "";
         try {
-            android.content.pm.ApplicationInfo ai = WebView.getCurrentWebViewPackage();
-            if (ai != null) provider = ai.packageName;
+            android.content.pm.PackageInfo pi = WebView.getCurrentWebViewPackage();
+            if (pi != null) provider = pi.packageName;
         } catch (Throwable t) {}
         final String prov = provider;
         wv.postDelayed(() -> {
