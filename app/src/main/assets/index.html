@@ -4,11 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Retro Cassette Player</title>
-<link rel="preconnect" href="https://api.allorigins.win" crossorigin>
-<link rel="preconnect" href="https://api.codetabs.com" crossorigin>
 <link rel="preconnect" href="https://i.ytimg.com" crossorigin>
 <link rel="preconnect" href="https://itunes.apple.com" crossorigin>
-<link rel="preconnect" href="https://r.jina.ai" crossorigin>
 <link href="https://cdn.jsdelivr.net/fontsource/css/oswald@latest/latin-700.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/fontsource/css/montserrat@latest/latin-800.css" rel="stylesheet">
 <style>
@@ -405,6 +402,7 @@
     padding: 6px 10px; border-radius: 4px;
     font-family: 'Courier New', monospace;
     font-size: 10px;
+    max-width: 90vw;
     display: none;
   }
   .debug-indicator.show { display: block; }
@@ -801,45 +799,18 @@
 </div>
 
 <audio id="audioEl"></audio>
-<audio id="unlockAudio" preload="auto"></audio>
 <div id="ytMount" style="position:absolute;width:1px;height:1px;opacity:0.01;pointer-events:none;overflow:hidden;"></div>
 
 <script>
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
-const DEBUG = true; // Mostrar debug en producción para diagnosticar
 
 /* ============ DEBUG ============ */
 const debugEl = document.getElementById('debugIndicator');
 function debug(msg) {
-  if (!DEBUG) return;
   debugEl.textContent = msg;
   debugEl.classList.add('show');
   console.log('[DEBUG]', msg);
 }
-
-/* ============ AUDIO UNLOCKER ============ */
-const unlockAudio = document.getElementById('unlockAudio');
-let audioUnlocked = false;
-
-function unlockAudioContext() {
-  if (audioUnlocked) return;
-  
-  // Crear un audio silencioso para desbloquear el contexto
-  unlockAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-  unlockAudio.play().then(() => {
-    audioUnlocked = true;
-    debug('Audio context unlocked');
-    unlockAudio.pause();
-    unlockAudio.currentTime = 0;
-  }).catch(e => {
-    debug('Audio unlock failed: ' + e.message);
-  });
-}
-
-// Intentar unlock en cada interacción del usuario
-document.addEventListener('touchstart', unlockAudioContext, { once: true, passive: true });
-document.addEventListener('click', unlockAudioContext, { once: true });
-document.addEventListener('keydown', unlockAudioContext, { once: true });
 
 /* ============ COVER FULLSCREEN + ZOOM ============ */
 const coverOverlay = document.getElementById('coverOverlay');
@@ -872,11 +843,6 @@ document.getElementById('coverClose').onclick = () => coverOverlay.classList.rem
 document.getElementById('zoomIn').onclick = () => setZoom(cov.s + 0.5);
 document.getElementById('zoomOut').onclick = () => setZoom(cov.s - 0.5);
 document.getElementById('zoomReset').onclick = () => setZoom(1);
-coverOverlay.addEventListener('wheel', e => {
-  e.preventDefault();
-  setZoom(cov.s + (e.deltaY < 0 ? 0.3 : -0.3));
-}, { passive: false });
-coverFullImg.addEventListener('dblclick', () => setZoom(cov.s > 1 ? 1 : 2.5));
 
 const pts = new Map();
 let pinch0 = 0, s0 = 1, pan0 = null;
@@ -1022,22 +988,17 @@ const soundFab = document.getElementById('soundFab');
 let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
 
-/* ---- Botón flotante de sonido ---- */
 soundFab.onclick = () => {
   if (mode === 'embed') {
     embedCmd('unMute'); embedCmd('setVolume', [100]); embedCmd('playVideo');
     setReels(true);
   } else if (mode === 'stream') {
-    audio.play().then(() => {
-      debug('Sound FAB: play success');
-    }).catch(e => {
-      debug('Sound FAB: play failed - ' + e.message);
-    });
+    audio.play().catch(() => {});
   }
   soundFab.classList.remove('show');
 };
 
-/* ---- MODO EMBED (solo si todo lo demás falla) ---- */
+/* ---- EMBED ---- */
 let embedFrame = null, embedPos = 0, embedTimer = null;
 
 function ensureEmbed() {
@@ -1091,11 +1052,11 @@ window.addEventListener('message', e => {
   } catch (err) {}
 });
 
-function fetchTimeout(url, ms = 6000) {
+function fetchTimeout(url, ms = 6000, init) {
   return new Promise((resolve, reject) => {
     const ctrl = new AbortController();
     const t = setTimeout(() => { ctrl.abort(); reject(new Error('timeout')); }, ms);
-    fetch(url, { signal: ctrl.signal })
+    fetch(url, Object.assign({ signal: ctrl.signal }, init || {}))
       .then(r => { clearTimeout(t); resolve(r); })
       .catch(e => { clearTimeout(t); reject(e); });
   });
@@ -1155,6 +1116,55 @@ function extractVideoId(str) {
   if (/^[\w-]{11}$/.test(str)) return str;
   const m = str.match(/(?:youtu\.be\/|v=|shorts\/|embed\/)([\w-]{11})/);
   return m ? m[1] : null;
+}
+
+/* ============ 🎯 FUENTE NATIVA: YouTube youtubei/v1/player (client ANDROID) ============ */
+const YT_CLIENTS = [
+  { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
+    userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
+  { clientName: 'ANDROID_MUSIC', clientVersion: '7.16.50', androidSdkVersion: 30,
+    userAgent: 'com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11; en_US) gzip' },
+  { clientName: 'ANDROID_CREATOR', clientVersion: '24.45.100', androidSdkVersion: 30,
+    userAgent: 'com.google.android.apps.youtube.creator/24.45.100 (Linux; U; Android 11; en_US) gzip' }
+];
+
+async function youtubeNativeStream(id) {
+  for (const client of YT_CLIENTS) {
+    try {
+      debug('Native: probando client ' + client.clientName + '...');
+      const r = await fetchTimeout('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', 9000, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': client.userAgent },
+        body: JSON.stringify({
+          context: { client: Object.assign({ hl: 'es', gl: 'US' }, client) },
+          videoId: id,
+          playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },
+          params: '8AEB'
+        })
+      });
+      if (!r.ok) { debug('Native ' + client.clientName + ': HTTP ' + r.status); continue; }
+      const j = await r.json();
+      const sd = j?.streamingData || {};
+      const all = [].concat(sd.formats || [], sd.adaptiveFormats || []);
+      const cands = all
+        .filter(f => f.url && /audio|mp4/.test(f.mimeType || ''))
+        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+      const pick = cands.find(f => /audio\/mp4/.test(f.mimeType || '')) ||
+                   cands.find(f => /audio/.test(f.mimeType || '')) ||
+                   cands[0];
+      if (pick) {
+        const vd = j.videoDetails || {};
+        const thumb = (vd.thumbnail?.thumbnails || []).slice(-1)[0]?.url ||
+                      ('https://i.ytimg.com/vi/' + id + '/hqdefault.jpg');
+        debug('Native OK: ' + client.clientName + ' → ' + (pick.itag || '?'));
+        return { url: pick.url, title: vd.title, author: vd.author || '', thumb };
+      }
+      debug('Native ' + client.clientName + ': sin URLs directas');
+    } catch (e) {
+      debug('Native ' + client.clientName + ' falló: ' + e.message);
+    }
+  }
+  return null;
 }
 
 /* ============ COVER HQ ============ */
@@ -1315,7 +1325,7 @@ async function searchMusic(q) {
   }
 }
 
-/* ============ AUDIO ============ */
+/* ============ FUENTES DE STREAM ============ */
 async function pipedStream(id) {
   for (const base of PIPED_INSTANCES) {
     try {
@@ -1366,60 +1376,27 @@ async function jinaStream(id) {
   return null;
 }
 
+/* NATIVA primero, luego el resto */
 function raceStreams(id, ms) {
   return withTimeout(
-    anyPromise([pipedStream(id), invidiousStream(id), jinaStream(id)]
+    anyPromise([youtubeNativeStream(id), pipedStream(id), invidiousStream(id), jinaStream(id)]
       .map(p => p.then(r => { if (!r) throw new Error('x'); return r; }))),
     ms
   ).catch(() => null);
 }
 
-/* Proxy CORS para URLs de audio (por si googlevideo.com bloquea) */
-function proxyAudioUrl(url) {
-  return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
-}
-
-async function tryPlayAudio(url, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      audio.src = url;
-      await audio.play();
-      debug('Audio play success (attempt ' + (i+1) + ')');
-      return true;
-    } catch (e) {
-      debug('Audio play failed (attempt ' + (i+1) + '): ' + e.message);
-      if (i < retries - 1) {
-        await new Promise(r => setTimeout(r, 500 * (i + 1)));
-      }
-    }
-  }
-  return false;
-}
-
-async function startStream(url, title, src) {
+function startStream(url, title, src) {
   soundFab.classList.remove('show');
   audio.src = url;
   mode = 'stream'; setLed('stream');
   setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
-  
-  debug('Attempting to play: ' + url.substring(0, 80) + '...');
-  
-  // Intentar reproducir directamente
-  const success = await tryPlayAudio(url);
-  
-  if (!success) {
-    debug('Direct play failed, trying proxy...');
-    // Intentar con proxy CORS
-    const proxiedUrl = proxyAudioUrl(url);
-    const proxySuccess = await tryPlayAudio(proxiedUrl);
-    
-    if (!proxySuccess) {
-      debug('All play attempts failed');
-      flashTitle('🔊 Pulsa ▶ para reproducir');
-      soundFab.classList.add('show');
-    }
-  }
+  audio.play().then(() => {
+    debug('🔊 SONANDO (stream nativo)');
+  }).catch(() => {
+    debug('Autoplay bloqueado: pulsa ▶');
+    soundFab.classList.add('show');
+  });
 }
 
 async function playById(id, title, thumb, author) {
@@ -1428,8 +1405,6 @@ async function playById(id, title, thumb, author) {
   showTitle('⏳ Cargando cinta...');
   setArtist(author);
   renderPL();
-  
-  debug('Loading: ' + id + ' - ' + title);
 
   const c = cacheGet(id);
   if (c) {
@@ -1441,44 +1416,29 @@ async function playById(id, title, thumb, author) {
 
   /* 1) cache fresco */
   if (c && c.s && Date.now() - (c.t || 0) < STREAM_TTL) {
-    debug('Using cached stream');
-    await startStream(c.s, c.title || title, c);
+    debug('Usando stream en cache');
+    startStream(c.s, c.title || title, c);
     return;
   }
 
-  /* ANDROID: SIEMPRE intentar stream primero */
-  if (IS_ANDROID || location.protocol === 'file:') {
-    debug('Android: racing for stream...');
-    const src = await raceStreams(id, 8000);
-    if (my !== playToken) return;
-    
-    if (src) {
-      debug('Stream found: ' + src.url.substring(0, 60) + '...');
-      cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
-      await startStream(src.url, src.title || title, src);
-      return;
-    }
-    
-    debug('No stream found, trying embed as fallback');
-    mode = 'embed'; setLed('embed');
-    embedLoad(id, true);
-    setReels(true);
-    setTimeout(() => { if (my === playToken && mode === 'embed') soundFab.classList.add('show'); }, 3000);
-    enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
-    return;
-  }
+  /* 2) carrera de streams (NATIVA YouTube primero) */
+  debug('Buscando stream...');
+  const src = await raceStreams(id, 10000);
+  if (my !== playToken) return;
 
-  /* http */
-  const src = await raceStreams(id, 6500);
   if (src) {
     cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
-    await startStream(src.url, src.title || title, src);
+    startStream(src.url, src.title || title, src);
     return;
   }
-  mode = 'iframe'; setLed('iframe');
-  const meta = await enrichMeta(id, title);
-  setArtist(meta.author || author);
-  ensureYT(() => { ytPlayer.loadVideoById(id); ytPlayer.playVideo(); });
+
+  /* 3) embed como último recurso */
+  debug('Sin stream → embed fallback');
+  mode = 'embed'; setLed('embed');
+  embedLoad(id, true);
+  setReels(true);
+  setTimeout(() => { if (my === playToken && mode === 'embed') soundFab.classList.add('show'); }, 3000);
+  enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
 }
 
 function ensureYT(cb) {
@@ -1515,12 +1475,7 @@ function autoNext() {
 /* ---------- Controles ---------- */
 function doPlay() {
   if (mode === 'stream') {
-    audio.play().then(() => {
-      debug('Play button: success');
-    }).catch(e => {
-      debug('Play button: failed - ' + e.message);
-      flashTitle('🔊 Pulsa ▶ de nuevo');
-    });
+    audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo'));
   }
   else if (mode === 'embed') {
     embedCmd('unMute');
@@ -1570,8 +1525,8 @@ document.querySelectorAll('.piano-btn').forEach(btn => {
 });
 
 /* ---------- Cinta viva ---------- */
-audio.addEventListener('play',  () => { setReels(true); debug('Audio playing'); });
-audio.addEventListener('pause', () => { setReels(false); debug('Audio paused'); });
+audio.addEventListener('play',  () => setReels(true));
+audio.addEventListener('pause', () => setReels(false));
 audio.addEventListener('timeupdate', () => {
   if (audio.duration) {
     const p = audio.currentTime / audio.duration;
@@ -1580,7 +1535,7 @@ audio.addEventListener('timeupdate', () => {
 });
 audio.addEventListener('ended', autoNext);
 audio.addEventListener('error', (e) => {
-  debug('Audio error: ' + e.target.error?.code + ' - ' + e.target.error?.message);
+  debug('Audio error: ' + (e.target.error?.message || 'desconocido'));
 });
 
 /* ---------- Overlay búsqueda ---------- */
@@ -1608,7 +1563,7 @@ document.getElementById('urlInput').addEventListener('keypress', e => {
 /* Init */
 updatePlBar();
 renderPL();
-debug('App ready. Platform: ' + (IS_ANDROID ? 'Android' : 'Desktop'));
+debug('Listo · ' + (IS_ANDROID ? 'Android' : 'Desktop'));
 </script>
 
 </body>
