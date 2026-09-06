@@ -8,7 +8,6 @@ import android.os.Environment;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.webkit.JavascriptInterface;
-import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -17,6 +16,14 @@ import android.widget.FrameLayout;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.schabi.newpipe.extractor.NewPipe;
+import org.schabi.newpipe.extractor.ServiceList;
+import org.schabi.newpipe.extractor.downloader.Downloader;
+import org.schabi.newpipe.extractor.downloader.Request;
+import org.schabi.newpipe.extractor.downloader.Response;
+import org.schabi.newpipe.extractor.exceptions.ReCaptchaException;
+import org.schabi.newpipe.extractor.stream.AudioStream;
+import org.schabi.newpipe.extractor.stream.StreamInfo;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -24,6 +31,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends Activity {
 
@@ -34,6 +43,7 @@ public class MainActivity extends Activity {
     private int noVideoCount = 0;
     private boolean triedAlt = false;
     private String lastId = null;
+    private boolean npInit = false;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -45,17 +55,7 @@ public class MainActivity extends Activity {
         wv = new WebView(this);
         config(wv.getSettings());
         wv.setWebViewClient(new WebViewClient());
-        wv.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                // Sin esto, el WebView deniega en silencio los permisos de medios
-                // protegidos (EME/Widevine) y el audio de YouTube no suena aunque
-                // el player reporte muted:false y volumen 100.
-                runOnUiThread(() -> {
-                    try { request.grant(request.getResources()); } catch (Exception e) {}
-                });
-            }
-        });
+        wv.setWebChromeClient(new WebChromeClient());
         wv.addJavascriptInterface(new Bridge(), "Android");
         root.addView(wv, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -64,27 +64,11 @@ public class MainActivity extends Activity {
         playerWv = new WebView(this);
         config(playerWv.getSettings());
         playerWv.setWebViewClient(new PlayerClient());
-        playerWv.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                runOnUiThread(() -> {
-                    try { request.grant(request.getResources()); } catch (Exception e) {}
-                });
-            }
-        });
+        playerWv.setWebChromeClient(new WebChromeClient());
         root.addView(playerWv, new FrameLayout.LayoutParams(2, 2));
 
         setContentView(root);
-
-        // Pide el foco de audio de música al arrancar, para que el stream
-        // del WebView no quede "reproduciendo" sin salida real de audio.
-        try {
-            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-            if (am != null) {
-                am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
-            }
-        } catch (Throwable t) {}
-
+        setVolumeControlStream(AudioManager.STREAM_MUSIC);
         wv.loadUrl("file:///android_asset/index.html");
     }
 
@@ -131,8 +115,8 @@ public class MainActivity extends Activity {
                         File f = new File(dir, id + ".m4a");
                         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                         c.setConnectTimeout(10000);
-                        c.setReadTimeout(60000);
-                        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11) Chrome/120 Mobile");
+                        c.setReadTimeout(120000);
+                        c.setRequestProperty("User-Agent", UA);
                         InputStream in = c.getInputStream();
                         FileOutputStream out = new FileOutputStream(f);
                         byte[] buf = new byte[16384];
@@ -167,18 +151,88 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
-    /* ============ EXTRACCIÓN MULTI-FUENTE (Java, sin CORS) ============ */
+    /* ============ NEWPIPE EXTRACTOR (fuente principal) ============ */
+    private static final String UA =
+            "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+
+    private synchronized void ensureNewPipe() {
+        if (!npInit) {
+            try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
+            npInit = true;
+        }
+    }
+
+    private String newpipeExtract(String id) {
+        try {
+            ensureNewPipe();
+            StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube,
+                    "https://www.youtube.com/watch?v=" + id);
+            List<AudioStream> audios = info.getAudioStreams();
+            AudioStream best = null;
+            for (AudioStream a : audios) {
+                if (a == null || a.getContent() == null) continue;
+                if (best == null || a.getAverageBitrate() > best.getAverageBitrate()) best = a;
+            }
+            if (best == null) return null;
+            JSONObject out = new JSONObject();
+            out.put("url", best.getContent());
+            out.put("title", info.getName());
+            out.put("author", info.getUploaderName());
+            return out.toString();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /* Downloader simple para NewPipe (HttpURLConnection) */
+    public static class HttpDownloader extends Downloader {
+        @Override
+        public Response execute(Request request) throws Exception {
+            HttpURLConnection conn = (HttpURLConnection) new URL(request.url()).openConnection();
+            conn.setRequestMethod(request.httpMethod());
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setRequestProperty("User-Agent", UA);
+            Map<String, List<String>> headers = request.headers();
+            if (headers != null) {
+                for (Map.Entry<String, List<String>> e : headers.entrySet()) {
+                    for (String v : e.getValue()) conn.addRequestProperty(e.getKey(), v);
+                }
+            }
+            byte[] data = request.dataToSend();
+            if (data != null) {
+                conn.setDoOutput(true);
+                OutputStream os = conn.getOutputStream();
+                os.write(data);
+                os.close();
+            }
+            int code = conn.getResponseCode();
+            if (code == 429) throw new ReCaptchaException("reCaptcha", request.url());
+            InputStream is = code >= 400 ? conn.getErrorStream() : conn.getInputStream();
+            String body = "";
+            if (is != null) {
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+                body = bo.toString("UTF-8");
+            }
+            return new Response(code, conn.getResponseMessage(),
+                    conn.getHeaderFields(), conn.getURL().toString(), body);
+        }
+    }
+
+    /* ============ EXTRACCIÓN MULTI-FUENTE ============ */
     private String nativePlayer(String id) {
+        debugJs("Java: NewPipe extractor...");
+        String r = newpipeExtract(id);
+        if (r != null) { debugJs("Java: NewPipe OK ✔"); return r; }
+
         debugJs("Java: probando TV client...");
-        String r = innertube(id,
+        r = innertube(id,
                 "{\"clientName\":\"TVHTML5\",\"clientVersion\":\"7.20250120.19.00\"}",
                 "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/537.36 (KHTML, like Gecko) 92.0.4515.43 TV Safari/537.36");
         if (r != null) { debugJs("Java: TV client OK ✔"); return r; }
-
-        r = innertube(id,
-                "{\"clientName\":\"ANDROID_MUSIC\",\"clientVersion\":\"7.16.50\",\"androidSdkVersion\":30}",
-                "com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11) gzip");
-        if (r != null) { debugJs("Java: ANDROID_MUSIC OK ✔"); return r; }
 
         r = fromInstances(id);
         if (r != null) return r;
@@ -336,7 +390,7 @@ public class MainActivity extends Activity {
         HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
         c.setConnectTimeout(6000);
         c.setReadTimeout(8000);
-        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/120 Mobile");
+        c.setRequestProperty("User-Agent", UA);
         int code = c.getResponseCode();
         if (code != 200) throw new Exception("http " + code);
         return readAll(c.getInputStream());
