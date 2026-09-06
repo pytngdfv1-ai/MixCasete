@@ -27,6 +27,7 @@ import org.schabi.newpipe.extractor.stream.StreamInfo;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -44,6 +45,9 @@ public class MainActivity extends Activity {
     private boolean triedAlt = false;
     private String lastId = null;
     private boolean npInit = false;
+
+    private static final String UA =
+            "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -151,10 +155,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
-    /* ============ NEWPIPE EXTRACTOR (fuente principal) ============ */
-    private static final String UA =
-            "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
-
+    /* ============ NEWPIPE EXTRACTOR ============ */
     private synchronized void ensureNewPipe() {
         if (!npInit) {
             try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
@@ -184,10 +185,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* Downloader simple para NewPipe (HttpURLConnection) */
     public static class HttpDownloader extends Downloader {
         @Override
-        public Response execute(Request request) throws Exception {
+        public Response execute(Request request) throws IOException, ReCaptchaException {
             HttpURLConnection conn = (HttpURLConnection) new URL(request.url()).openConnection();
             conn.setRequestMethod(request.httpMethod());
             conn.setConnectTimeout(15000);
@@ -404,7 +404,7 @@ public class MainActivity extends Activity {
         return bo.toString("UTF-8");
     }
 
-    /* ============ WEBVIEW DE FONDO (último recurso) ============ */
+    /* ============ WEBVIEW DE FONDO ============ */
     private class PlayerClient extends WebViewClient {
         @Override
         public void onPageFinished(WebView view, String url) {
