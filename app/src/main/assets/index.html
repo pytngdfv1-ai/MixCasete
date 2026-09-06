@@ -84,6 +84,7 @@
     width: 100%; height: 100%;
     object-fit: cover; object-position: center; display: block;
     pointer-events: none;
+    transition: opacity 0.25s;
   }
 
   .album-square::after {
@@ -100,6 +101,18 @@
     padding: 4px 7px; border-radius: 10px;
     pointer-events: none;
   }
+
+  /* Toggle video/cover */
+  .view-toggle {
+    position: absolute; right: 8px; top: 8px; z-index: 3;
+    width: 36px; height: 36px; border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.35);
+    background: rgba(0,0,0,0.5); color: #fff; font-size: 16px;
+    cursor: pointer;
+  }
+  .album-square.video-on img { opacity: 0; }
+  .album-square.video-on::after { display: none; }
+  .album-square.video-on .zoom-hint { display: none; }
 
   .cassette-window {
     margin: 14px 6px 0 6px;
@@ -664,6 +677,7 @@
   <div class="album-area">
     <div class="album-square" id="albumSquare">
       <img id="albumImg" src="https://image.qwenlm.ai/public_source/73f575de-f2a3-4b64-b512-110b8807a7bd/1821418eb-dd31-4840-83e9-c11413ca3667.png" alt="Album">
+      <button class="view-toggle" id="viewToggle">📺</button>
       <span class="zoom-hint">🔍 VER</span>
     </div>
   </div>
@@ -829,14 +843,17 @@ const soundFab = document.getElementById('soundFab');
 const coverOverlay = document.getElementById('coverOverlay');
 const coverFullImg = document.getElementById('coverFullImg');
 const zoomLevelEl = document.getElementById('zoomLevel');
+const albumSquare = document.getElementById('albumSquare');
+const viewToggle = document.getElementById('viewToggle');
 
 let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
 let embedFrame = null, embedPos = 0, embedTimer = null;
 let current = { id: null, title: '', author: '', thumb: '' };
 let playToken = 0;
+let videoMode = false;
 
-/* ============ STREAM VÍA JAVA (sin CORS) ============ */
+/* ============ STREAM VÍA JAVA ============ */
 function bridgeGetStream(id) {
   return new Promise(res => {
     let done = false;
@@ -873,7 +890,8 @@ function setZoom(ns) {
   if (cov.s === 1) { cov.tx = 0; cov.ty = 0; }
   clampCov(); applyCov();
 }
-document.getElementById('albumSquare').addEventListener('click', () => {
+albumSquare.addEventListener('click', () => {
+  if (videoMode) return;   /* en modo video no abre el zoom */
   coverFullImg.src = albumImg.src;
   cov.s = 1; cov.tx = 0; cov.ty = 0; applyCov();
   coverOverlay.classList.add('open');
@@ -910,6 +928,43 @@ coverFullImg.addEventListener('pointermove', e => {
 ['pointerup', 'pointercancel'].forEach(ev =>
   coverFullImg.addEventListener(ev, e => { pts.delete(e.pointerId); pan0 = null; pinch0 = 0; })
 );
+
+/* ============ MODO VIDEO / COVER (toggle 📺/💿) ============ */
+function placeVideoRect() {
+  if (!HAS_BRIDGE) return;
+  const r = albumSquare.getBoundingClientRect();
+  try { Android.placeVideo(r.left, r.top, r.width, r.height); } catch (e) {}
+}
+function refreshVideo() {
+  if (!current.id) return;
+  if (HAS_BRIDGE) {
+    placeVideoRect();
+    try { Android.loadVideo(current.id); } catch (e) {}
+  } else {
+    let f = document.getElementById('webVideoFrame');
+    if (!f) {
+      f = document.createElement('iframe');
+      f.id = 'webVideoFrame';
+      f.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
+      f.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:12px;';
+      albumSquare.appendChild(f);
+    }
+    f.style.display = 'block';
+    f.src = 'https://www.youtube.com/embed/' + current.id + '?playsinline=1&rel=0';
+  }
+}
+function setVideoMode(on) {
+  videoMode = on;
+  viewToggle.textContent = on ? '💿' : '📺';
+  albumSquare.classList.toggle('video-on', on);
+  if (on) {
+    refreshVideo();
+  } else {
+    if (HAS_BRIDGE) { try { Android.hideVideo(); } catch (e) {} }
+    else { const f = document.getElementById('webVideoFrame'); if (f) f.style.display = 'none'; }
+  }
+}
+viewToggle.onclick = (e) => { e.stopPropagation(); setVideoMode(!videoMode); };
 
 /* ============ CACHE ============ */
 const CACHE_KEY = 'mixcasete_cache_v1';
@@ -991,7 +1046,7 @@ function flashTitle(msg) {
   flashTimer = setTimeout(() => { showTitle(current.title || '—'); }, 2200);
 }
 
-/* ============ REC: guarda + descarga ============ */
+/* ============ REC ============ */
 function recToPlaylist() {
   const dot = document.getElementById('plRecDot');
   if (!current.id || !current.title) { flashTitle('⚠️ Nada sonando para grabar'); return; }
@@ -1080,7 +1135,7 @@ function extractVideoId(str) {
   return m ? m[1] : null;
 }
 
-/* ============ BRIDGE: estado del WebView de fondo ============ */
+/* ============ BRIDGE: estado WebView fondo ============ */
 window.onBridgeState = function (s) {
   if (mode !== 'bridge') return;
   if (!s) return;
@@ -1112,7 +1167,10 @@ function fbSeek(s) { if (mode === 'bridge') Android.seekYT(s); else { embedPos =
 function fbUnmute(){ if (mode === 'bridge') Android.unmuteYT(); else { embedCmd('unMute'); embedCmd('setVolume', [100]); } }
 
 soundFab.onclick = () => {
-  if (mode === 'bridge' || mode === 'embed') { fbUnmute(); fbPlay(); setReels(true); }
+  if (mode === 'bridge' || mode === 'embed') {
+    fbUnmute(); fbPlay(); setReels(true);
+    try { if (mode === 'bridge') Android.showVideo(current.id, true); } catch (e) {}
+  }
   else if (mode === 'stream') { audio.play().catch(() => {}); }
   soundFab.classList.remove('show');
 };
@@ -1169,7 +1227,7 @@ window.addEventListener('message', e => {
   } catch (err) {}
 });
 
-/* ============ LISTAS DE INSTANCIAS VIVAS ============ */
+/* ============ LISTAS VIVAS ============ */
 let listsPromise = null;
 function loadLists() {
   if (listsPromise) return listsPromise;
@@ -1196,7 +1254,7 @@ function loadLists() {
   return listsPromise;
 }
 
-/* ============ FUENTE NATIVA WEB ============ */
+/* ============ NATIVA WEB ============ */
 const YT_CLIENTS = [
   { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
     userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
@@ -1494,7 +1552,18 @@ async function playById(id, title, thumb, author) {
   } else if (thumb) { albumImg.src = thumb; }
   setCoverHQ(id, title || (c && c.title) || '');
 
-  /* 1) archivo LOCAL descargado */
+  /* MODO VIDEO: el player visible pone el audio */
+  if (videoMode) {
+    debug('Modo video activo 📺');
+    refreshVideo();
+    mode = HAS_BRIDGE ? 'bridge' : 'embed';
+    setLed(mode);
+    setReels(true);
+    enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
+    return;
+  }
+
+  /* 1) archivo LOCAL */
   const localItem = playlist.find(t => t.id === id);
   if (localItem && localItem.local) {
     debug('Reproduciendo desde almacenamiento local 💾');
@@ -1587,7 +1656,10 @@ function doPause() {
 }
 function doStop() {
   if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
-  else if (mode === 'bridge' || mode === 'embed') fbStop();
+  else if (mode === 'bridge' || mode === 'embed') {
+    fbStop();
+    try { Android.hideVideo(); } catch (e) {}
+  }
   else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
   setReels(false);
   soundFab.classList.remove('show');
@@ -1616,7 +1688,7 @@ document.querySelectorAll('.piano-btn').forEach(btn => {
   });
 });
 
-/* ============ CINTA VIVA (animaciones) ============ */
+/* ============ CINTA VIVA ============ */
 audio.addEventListener('play',    () => setReels(true));
 audio.addEventListener('playing', () => { setReels(true); debug('🔊 SONANDO'); });
 audio.addEventListener('pause',   () => setReels(false));
