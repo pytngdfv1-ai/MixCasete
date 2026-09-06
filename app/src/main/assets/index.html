@@ -55,7 +55,7 @@
     width: 15px; height: 40px;
     background: repeating-linear-gradient(180deg, #d8d8d8 0 3px, #9a9a9a 3px 5px);
     border-radius: 2px 5px 5px 2px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,0.7);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.5), inset 0 1px 1px rgba(255,255,255,0.7);
   }
 
   .side-grille {
@@ -387,7 +387,6 @@
     box-shadow: inset 0 1px 1px rgba(255,255,255,0.5);
   }
 
-  /* Botón flotante de sonido */
   .sound-fab {
     position: fixed; right: 18px; bottom: 18px; z-index: 400;
     width: 58px; height: 58px; border-radius: 50%;
@@ -399,6 +398,16 @@
     cursor: pointer;
   }
   .sound-fab.show { display: block; animation: blink 1s infinite; }
+
+  .debug-indicator {
+    position: fixed; left: 10px; top: 10px; z-index: 999;
+    background: rgba(0,0,0,0.8); color: #0f0;
+    padding: 6px 10px; border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    display: none;
+  }
+  .debug-indicator.show { display: block; }
 
   .search-overlay, .playlist-overlay {
     position: fixed; inset: 0; z-index: 100;
@@ -647,6 +656,8 @@
   </defs>
 </svg>
 
+<div class="debug-indicator" id="debugIndicator"></div>
+
 <div class="device" id="device">
   <div class="top-grille"></div>
   <div class="side-knob"></div>
@@ -790,10 +801,45 @@
 </div>
 
 <audio id="audioEl"></audio>
+<audio id="unlockAudio" preload="auto"></audio>
 <div id="ytMount" style="position:absolute;width:1px;height:1px;opacity:0.01;pointer-events:none;overflow:hidden;"></div>
 
 <script>
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const DEBUG = true; // Mostrar debug en producción para diagnosticar
+
+/* ============ DEBUG ============ */
+const debugEl = document.getElementById('debugIndicator');
+function debug(msg) {
+  if (!DEBUG) return;
+  debugEl.textContent = msg;
+  debugEl.classList.add('show');
+  console.log('[DEBUG]', msg);
+}
+
+/* ============ AUDIO UNLOCKER ============ */
+const unlockAudio = document.getElementById('unlockAudio');
+let audioUnlocked = false;
+
+function unlockAudioContext() {
+  if (audioUnlocked) return;
+  
+  // Crear un audio silencioso para desbloquear el contexto
+  unlockAudio.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+  unlockAudio.play().then(() => {
+    audioUnlocked = true;
+    debug('Audio context unlocked');
+    unlockAudio.pause();
+    unlockAudio.currentTime = 0;
+  }).catch(e => {
+    debug('Audio unlock failed: ' + e.message);
+  });
+}
+
+// Intentar unlock en cada interacción del usuario
+document.addEventListener('touchstart', unlockAudioContext, { once: true, passive: true });
+document.addEventListener('click', unlockAudioContext, { once: true });
+document.addEventListener('keydown', unlockAudioContext, { once: true });
 
 /* ============ COVER FULLSCREEN + ZOOM ============ */
 const coverOverlay = document.getElementById('coverOverlay');
@@ -982,13 +1028,17 @@ soundFab.onclick = () => {
     embedCmd('unMute'); embedCmd('setVolume', [100]); embedCmd('playVideo');
     setReels(true);
   } else if (mode === 'stream') {
-    audio.play().catch(() => {});
+    audio.play().then(() => {
+      debug('Sound FAB: play success');
+    }).catch(e => {
+      debug('Sound FAB: play failed - ' + e.message);
+    });
   }
   soundFab.classList.remove('show');
 };
 
-/* ---- MODO EMBED + ráfaga unmute ---- */
-let embedFrame = null, embedPos = 0, embedTimer = null, unmuteBurst = null;
+/* ---- MODO EMBED (solo si todo lo demás falla) ---- */
+let embedFrame = null, embedPos = 0, embedTimer = null;
 
 function ensureEmbed() {
   if (embedFrame) return embedFrame;
@@ -1018,17 +1068,8 @@ function embedLoad(id, autoplay) {
   embedPos = 0;
   f.src = 'https://www.youtube.com/embed/' + id +
     '?enablejsapi=1&playsinline=1&rel=0&mute=0' + (autoplay ? '&autoplay=1' : '');
-  if (autoplay) { startEmbedClock(); startUnmuteBurst(); }
+  if (autoplay) startEmbedClock();
 }
-function startUnmuteBurst() {
-  stopUnmuteBurst();
-  let n = 0;
-  unmuteBurst = setInterval(() => {
-    embedCmd('unMute'); embedCmd('setVolume', [100]);
-    if (++n > 10) stopUnmuteBurst();
-  }, 600);
-}
-function stopUnmuteBurst() { if (unmuteBurst) { clearInterval(unmuteBurst); unmuteBurst = null; } }
 function startEmbedClock() {
   stopEmbedClock();
   embedTimer = setInterval(() => { embedPos++; }, 1000);
@@ -1300,7 +1341,6 @@ function extractJson(txt) {
   if (a === -1 || b === -1 || b <= a) return null;
   try { return JSON.parse(txt.slice(a, b + 1)); } catch (e) { return null; }
 }
-/* Unificado: Piped (audioStreams) + Invidious (adaptiveFormats) */
 function pickFormats(j, id) {
   if (!j) return null;
   const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
@@ -1312,7 +1352,6 @@ function pickFormats(j, id) {
   if (prog) return { url: prog.url, title: j.title, author: j.author || j.uploader || '', thumb };
   return null;
 }
-/* Piped + Invidious vía Jina (CORS abierto siempre) */
 async function jinaStream(id) {
   const all = INVIDIOUS_INSTANCES.map(b => ({ b, p: '/api/v1/videos/' }))
     .concat(PIPED_INSTANCES.map(b => ({ b, p: '/streams/' })));
@@ -1335,17 +1374,52 @@ function raceStreams(id, ms) {
   ).catch(() => null);
 }
 
-function startStream(url, title, src) {
+/* Proxy CORS para URLs de audio (por si googlevideo.com bloquea) */
+function proxyAudioUrl(url) {
+  return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+}
+
+async function tryPlayAudio(url, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      audio.src = url;
+      await audio.play();
+      debug('Audio play success (attempt ' + (i+1) + ')');
+      return true;
+    } catch (e) {
+      debug('Audio play failed (attempt ' + (i+1) + '): ' + e.message);
+      if (i < retries - 1) {
+        await new Promise(r => setTimeout(r, 500 * (i + 1)));
+      }
+    }
+  }
+  return false;
+}
+
+async function startStream(url, title, src) {
   soundFab.classList.remove('show');
-  stopUnmuteBurst();
   audio.src = url;
   mode = 'stream'; setLed('stream');
   setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
-  audio.play().catch(() => {
-    flashTitle('🔊 Autoplay bloqueado: pulsa ▶');
-    soundFab.classList.add('show');
-  });
+  
+  debug('Attempting to play: ' + url.substring(0, 80) + '...');
+  
+  // Intentar reproducir directamente
+  const success = await tryPlayAudio(url);
+  
+  if (!success) {
+    debug('Direct play failed, trying proxy...');
+    // Intentar con proxy CORS
+    const proxiedUrl = proxyAudioUrl(url);
+    const proxySuccess = await tryPlayAudio(proxiedUrl);
+    
+    if (!proxySuccess) {
+      debug('All play attempts failed');
+      flashTitle('🔊 Pulsa ▶ para reproducir');
+      soundFab.classList.add('show');
+    }
+  }
 }
 
 async function playById(id, title, thumb, author) {
@@ -1354,6 +1428,8 @@ async function playById(id, title, thumb, author) {
   showTitle('⏳ Cargando cinta...');
   setArtist(author);
   renderPL();
+  
+  debug('Loading: ' + id + ' - ' + title);
 
   const c = cacheGet(id);
   if (c) {
@@ -1365,35 +1441,30 @@ async function playById(id, title, thumb, author) {
 
   /* 1) cache fresco */
   if (c && c.s && Date.now() - (c.t || 0) < STREAM_TTL) {
-    startStream(c.s, c.title || title, c);
+    debug('Using cached stream');
+    await startStream(c.s, c.title || title, c);
     return;
   }
 
-  if (location.protocol === 'file:') {
-    /* ANDROID: audio nativo PRIMERO (fetch directo permitido en WebView) */
-    if (IS_ANDROID) {
-      const src = await raceStreams(id, 5000);
-      if (my !== playToken) return;
-      if (src) {
-        cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
-        startStream(src.url, src.title || title, src);
-        return;
-      }
+  /* ANDROID: SIEMPRE intentar stream primero */
+  if (IS_ANDROID || location.protocol === 'file:') {
+    debug('Android: racing for stream...');
+    const src = await raceStreams(id, 8000);
+    if (my !== playToken) return;
+    
+    if (src) {
+      debug('Stream found: ' + src.url.substring(0, 60) + '...');
+      cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
+      await startStream(src.url, src.title || title, src);
+      return;
     }
-    /* embed como colchón */
+    
+    debug('No stream found, trying embed as fallback');
     mode = 'embed'; setLed('embed');
     embedLoad(id, true);
     setReels(true);
     setTimeout(() => { if (my === playToken && mode === 'embed') soundFab.classList.add('show'); }, 3000);
     enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
-    raceStreams(id, 8000).then(src => {
-      if (!src || my !== playToken) return;
-      cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
-      if (mode === 'embed' || mode === 'stream') {
-        embedCmd('stopVideo'); stopEmbedClock(); setReels(false);
-        startStream(src.url, src.title || title, src);
-      }
-    });
     return;
   }
 
@@ -1401,7 +1472,7 @@ async function playById(id, title, thumb, author) {
   const src = await raceStreams(id, 6500);
   if (src) {
     cacheSet(id, { s: src.url, title: src.title || title, author: src.author || '' });
-    startStream(src.url, src.title || title, src);
+    await startStream(src.url, src.title || title, src);
     return;
   }
   mode = 'iframe'; setLed('iframe');
@@ -1444,7 +1515,12 @@ function autoNext() {
 /* ---------- Controles ---------- */
 function doPlay() {
   if (mode === 'stream') {
-    audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo'));
+    audio.play().then(() => {
+      debug('Play button: success');
+    }).catch(e => {
+      debug('Play button: failed - ' + e.message);
+      flashTitle('🔊 Pulsa ▶ de nuevo');
+    });
   }
   else if (mode === 'embed') {
     embedCmd('unMute');
@@ -1494,8 +1570,8 @@ document.querySelectorAll('.piano-btn').forEach(btn => {
 });
 
 /* ---------- Cinta viva ---------- */
-audio.addEventListener('play',  () => setReels(true));
-audio.addEventListener('pause', () => setReels(false));
+audio.addEventListener('play',  () => { setReels(true); debug('Audio playing'); });
+audio.addEventListener('pause', () => { setReels(false); debug('Audio paused'); });
 audio.addEventListener('timeupdate', () => {
   if (audio.duration) {
     const p = audio.currentTime / audio.duration;
@@ -1503,6 +1579,9 @@ audio.addEventListener('timeupdate', () => {
   }
 });
 audio.addEventListener('ended', autoNext);
+audio.addEventListener('error', (e) => {
+  debug('Audio error: ' + e.target.error?.code + ' - ' + e.target.error?.message);
+});
 
 /* ---------- Overlay búsqueda ---------- */
 const overlay = document.getElementById('searchOverlay');
@@ -1529,6 +1608,7 @@ document.getElementById('urlInput').addEventListener('keypress', e => {
 /* Init */
 updatePlBar();
 renderPL();
+debug('App ready. Platform: ' + (IS_ANDROID ? 'Android' : 'Desktop'));
 </script>
 
 </body>
