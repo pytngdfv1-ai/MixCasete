@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.media.AudioManager;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.webkit.JavascriptInterface;
@@ -12,6 +13,16 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
 public class MainActivity extends Activity {
 
@@ -48,21 +59,13 @@ public class MainActivity extends Activity {
         setContentView(root);
         wv.loadUrl("file:///android_asset/index.html");
 
-        /* Detecta qué motor WebView está usando el sistema */
         String provider = "";
         try {
             android.content.pm.PackageInfo pi = WebView.getCurrentWebViewPackage();
             if (pi != null) provider = pi.packageName;
         } catch (Throwable t) {}
         final String prov = provider;
-        wv.postDelayed(() -> {
-            if (prov.contains("brave")) {
-                wv.evaluateJavascript(
-                    "debug('⚠ WebView=Brave (mutea por sistema). Cambia: Opciones desarrollador → WebView → System WebView/Chrome')", null);
-            } else {
-                wv.evaluateJavascript("debug('WebView: " + prov + "')", null);
-            }
-        }, 1500);
+        wv.postDelayed(() -> wv.evaluateJavascript("debug('WebView: " + prov + "')", null), 1500);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -79,7 +82,53 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
     }
 
+    /* ================= PUENTE ================= */
     public class Bridge {
+        /* Extrae URL de audio desde JAVA (sin CORS) y la devuelve a la web */
+        @JavascriptInterface
+        public void getStream(final String id) {
+            new Thread(() -> {
+                String json = null;
+                try { json = nativePlayer(id); } catch (Exception e) {}
+                final String out = json;
+                runOnUiThread(() -> wv.evaluateJavascript(
+                        "window.__streamCb && window.__streamCb(" + (out != null ? out : "null") + ")", null));
+            }).start();
+        }
+
+        /* Descarga el tema al almacenamiento local de la app */
+        @JavascriptInterface
+        public void downloadYT(final String id, final String title) {
+            new Thread(() -> {
+                String path = null;
+                try {
+                    JSONObject j = new JSONObject(nativePlayer(id));
+                    String url = j.getString("url");
+                    File dir = getExternalFilesDir(Environment.DIRECTORY_MUSIC);
+                    if (dir != null) {
+                        File f = new File(dir, id + ".m4a");
+                        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+                        c.setConnectTimeout(10000);
+                        c.setReadTimeout(30000);
+                        InputStream in = c.getInputStream();
+                        FileOutputStream out = new FileOutputStream(f);
+                        byte[] buf = new byte[16384];
+                        int n;
+                        long total = 0;
+                        while ((n = in.read(buf)) > 0) { out.write(buf, 0, n); total += n; }
+                        out.close();
+                        in.close();
+                        if (total > 10000) path = f.getAbsolutePath();
+                        else f.delete();
+                    }
+                } catch (Exception e) {}
+                final String p = path;
+                runOnUiThread(() -> wv.evaluateJavascript(
+                        "window.onDownloaded && window.onDownloaded('" + id + "'," +
+                        (p != null ? "'" + p + "'" : "null") + ")", null));
+            }).start();
+        }
+
         @JavascriptInterface
         public void playYT(final String id) {
             lastId = id;
@@ -95,6 +144,73 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
+    /* ============ EXTRACCIÓN NATIVA (Java, sin CORS) ============ */
+    private String nativePlayer(String id) {
+        String[] clients = {
+            "{\"clientName\":\"ANDROID\",\"clientVersion\":\"19.09.37\",\"androidSdkVersion\":30," +
+            "\"userAgent\":\"com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip\"}",
+            "{\"clientName\":\"ANDROID_MUSIC\",\"clientVersion\":\"7.16.50\",\"androidSdkVersion\":30," +
+            "\"userAgent\":\"com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11; en_US) gzip\"}"
+        };
+        for (String client : clients) {
+            try {
+                HttpURLConnection c = (HttpURLConnection) new URL(
+                        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection();
+                c.setRequestMethod("POST");
+                c.setConnectTimeout(8000);
+                c.setReadTimeout(8000);
+                c.setRequestProperty("Content-Type", "application/json");
+                c.setDoOutput(true);
+                String body = "{\"context\":{\"client\":" + client + ",\"hl\":\"es\",\"gl\":\"US\"}," +
+                        "\"videoId\":\"" + id + "\",\"params\":\"8AEB\"}";
+                OutputStream os = c.getOutputStream();
+                os.write(body.getBytes("UTF-8"));
+                os.close();
+                if (c.getResponseCode() != 200) continue;
+                JSONObject j = new JSONObject(readAll(c.getInputStream()));
+                JSONObject sd = j.optJSONObject("streamingData");
+                if (sd == null) continue;
+                String url = null;
+                int best = -1;
+                JSONArray ad = sd.optJSONArray("adaptiveFormats");
+                if (ad != null) {
+                    for (int i = 0; i < ad.length(); i++) {
+                        JSONObject f = ad.getJSONObject(i);
+                        if (f.optString("mimeType", "").startsWith("audio/mp4") && f.has("url")) {
+                            int br = f.optInt("bitrate", 0);
+                            if (br > best) { best = br; url = f.getString("url"); }
+                        }
+                    }
+                }
+                if (url == null) {
+                    JSONArray fm = sd.optJSONArray("formats");
+                    if (fm != null) for (int i = 0; i < fm.length(); i++) {
+                        JSONObject f = fm.getJSONObject(i);
+                        if (f.has("url")) { url = f.getString("url"); break; }
+                    }
+                }
+                if (url != null) {
+                    JSONObject out = new JSONObject();
+                    out.put("url", url);
+                    JSONObject vd = j.optJSONObject("videoDetails");
+                    out.put("title", vd != null ? vd.optString("title", "") : "");
+                    out.put("author", vd != null ? vd.optString("author", "") : "");
+                    return out.toString();
+                }
+            } catch (Exception e) { /* siguiente client */ }
+        }
+        return null;
+    }
+
+    private String readAll(InputStream is) throws Exception {
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+        return bo.toString("UTF-8");
+    }
+
+    /* ============ WEBVIEW DE FONDO (último recurso) ============ */
     private class PlayerClient extends WebViewClient {
         @Override
         public void onPageFinished(WebView view, String url) {
@@ -109,7 +225,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* Toque sintético = activación de usuario dentro del player */
     private void tap() {
         long t = SystemClock.uptimeMillis();
         MotionEvent down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, 1f, 1f, 0);
@@ -120,7 +235,6 @@ public class MainActivity extends Activity {
         up.recycle();
     }
 
-    /* Pide foco de audio + fuerza unmute/play */
     private void enforce() {
         try {
             AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
@@ -157,9 +271,7 @@ public class MainActivity extends Activity {
                     } else {
                         noVideoCount = 0;
                         if ((value.contains("\"m\":true") || value.contains("\"p\":true"))
-                                && !value.contains("\"e\":true")) {
-                            enforce();
-                        }
+                                && !value.contains("\"e\":true")) enforce();
                     }
                     wv.evaluateJavascript(
                         "window.onBridgeState && window.onBridgeState(" + value + ");", null);
