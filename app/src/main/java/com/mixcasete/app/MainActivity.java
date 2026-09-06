@@ -58,14 +58,6 @@ public class MainActivity extends Activity {
 
         setContentView(root);
         wv.loadUrl("file:///android_asset/index.html");
-
-        String provider = "";
-        try {
-            android.content.pm.PackageInfo pi = WebView.getCurrentWebViewPackage();
-            if (pi != null) provider = pi.packageName;
-        } catch (Throwable t) {}
-        final String prov = provider;
-        wv.postDelayed(() -> wv.evaluateJavascript("debug('WebView: " + prov + "')", null), 1500);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -82,9 +74,12 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
     }
 
+    private void debugJs(final String m) {
+        runOnUiThread(() -> wv.evaluateJavascript("debug('" + m + "')", null));
+    }
+
     /* ================= PUENTE ================= */
     public class Bridge {
-        /* Extrae URL de audio desde JAVA (sin CORS) y la devuelve a la web */
         @JavascriptInterface
         public void getStream(final String id) {
             new Thread(() -> {
@@ -96,7 +91,6 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /* Descarga el tema al almacenamiento local de la app */
         @JavascriptInterface
         public void downloadYT(final String id, final String title) {
             new Thread(() -> {
@@ -109,7 +103,8 @@ public class MainActivity extends Activity {
                         File f = new File(dir, id + ".m4a");
                         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
                         c.setConnectTimeout(10000);
-                        c.setReadTimeout(30000);
+                        c.setReadTimeout(60000);
+                        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11) Chrome/120 Mobile");
                         InputStream in = c.getInputStream();
                         FileOutputStream out = new FileOutputStream(f);
                         byte[] buf = new byte[16384];
@@ -144,62 +139,171 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
-    /* ============ EXTRACCIÓN NATIVA (Java, sin CORS) ============ */
+    /* ============ EXTRACCIÓN MULTI-FUENTE (Java, sin CORS) ============ */
     private String nativePlayer(String id) {
-        String[] clients = {
-            "{\"clientName\":\"ANDROID\",\"clientVersion\":\"19.09.37\",\"androidSdkVersion\":30," +
-            "\"userAgent\":\"com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip\"}",
-            "{\"clientName\":\"ANDROID_MUSIC\",\"clientVersion\":\"7.16.50\",\"androidSdkVersion\":30," +
-            "\"userAgent\":\"com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11; en_US) gzip\"}"
-        };
-        for (String client : clients) {
-            try {
-                HttpURLConnection c = (HttpURLConnection) new URL(
-                        "https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection();
-                c.setRequestMethod("POST");
-                c.setConnectTimeout(8000);
-                c.setReadTimeout(8000);
-                c.setRequestProperty("Content-Type", "application/json");
-                c.setDoOutput(true);
-                String body = "{\"context\":{\"client\":" + client + ",\"hl\":\"es\",\"gl\":\"US\"}," +
-                        "\"videoId\":\"" + id + "\",\"params\":\"8AEB\"}";
-                OutputStream os = c.getOutputStream();
-                os.write(body.getBytes("UTF-8"));
-                os.close();
-                if (c.getResponseCode() != 200) continue;
-                JSONObject j = new JSONObject(readAll(c.getInputStream()));
-                JSONObject sd = j.optJSONObject("streamingData");
-                if (sd == null) continue;
-                String url = null;
-                int best = -1;
-                JSONArray ad = sd.optJSONArray("adaptiveFormats");
-                if (ad != null) {
-                    for (int i = 0; i < ad.length(); i++) {
-                        JSONObject f = ad.getJSONObject(i);
-                        if (f.optString("mimeType", "").startsWith("audio/mp4") && f.has("url")) {
-                            int br = f.optInt("bitrate", 0);
-                            if (br > best) { best = br; url = f.getString("url"); }
-                        }
+        debugJs("Java: probando TV client...");
+        String r = innertube(id,
+                "{\"clientName\":\"TVHTML5\",\"clientVersion\":\"7.20250120.19.00\"}",
+                "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/537.36 (KHTML, like Gecko) 92.0.4515.43 TV Safari/537.36");
+        if (r != null) { debugJs("Java: TV client OK ✔"); return r; }
+
+        r = innertube(id,
+                "{\"clientName\":\"ANDROID_MUSIC\",\"clientVersion\":\"7.16.50\",\"androidSdkVersion\":30}",
+                "com.google.android.apps.youtube.music/7.16.50 (Linux; U; Android 11) gzip");
+        if (r != null) { debugJs("Java: ANDROID_MUSIC OK ✔"); return r; }
+
+        r = fromInstances(id);
+        if (r != null) return r;
+
+        debugJs("Java: ninguna fuente dio audio ✖");
+        return null;
+    }
+
+    /* YouTube innertube directo */
+    private String innertube(String id, String clientJson, String ua) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(
+                    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection();
+            c.setRequestMethod("POST");
+            c.setConnectTimeout(7000);
+            c.setReadTimeout(7000);
+            c.setRequestProperty("Content-Type", "application/json");
+            c.setRequestProperty("User-Agent", ua);
+            c.setDoOutput(true);
+            String body = "{\"context\":{\"client\":" + clientJson + ",\"hl\":\"es\",\"gl\":\"US\"}," +
+                    "\"videoId\":\"" + id + "\",\"params\":\"8AEB\"}";
+            OutputStream os = c.getOutputStream();
+            os.write(body.getBytes("UTF-8"));
+            os.close();
+            if (c.getResponseCode() != 200) return null;
+            JSONObject j = new JSONObject(readAll(c.getInputStream()));
+            JSONObject sd = j.optJSONObject("streamingData");
+            if (sd == null) return null;
+            String url = null;
+            int best = -1;
+            JSONArray ad = sd.optJSONArray("adaptiveFormats");
+            if (ad != null) for (int i = 0; i < ad.length(); i++) {
+                JSONObject f = ad.getJSONObject(i);
+                if (f.has("url") && f.optString("mimeType", "").startsWith("audio/mp4")) {
+                    int br = f.optInt("bitrate", 0);
+                    if (br > best) { best = br; url = f.getString("url"); }
+                }
+            }
+            if (url == null) {
+                JSONArray fm = sd.optJSONArray("formats");
+                if (fm != null) for (int i = 0; i < fm.length(); i++) {
+                    JSONObject f = fm.getJSONObject(i);
+                    if (f.has("url")) { url = f.getString("url"); break; }
+                }
+            }
+            if (url == null) return null;
+            JSONObject out = new JSONObject();
+            out.put("url", url);
+            JSONObject vd = j.optJSONObject("videoDetails");
+            out.put("title", vd != null ? vd.optString("title", "") : "");
+            out.put("author", vd != null ? vd.optString("author", "") : "");
+            return out.toString();
+        } catch (Exception e) { return null; }
+    }
+
+    /* Invidious + Piped desde Java (sin CORS → todas las instancias sirven) */
+    private String fromInstances(String id) {
+        try {
+            JSONArray arr = new JSONArray(httpGet("https://api.invidious.io/instances.json?sort_by=health"));
+            int tried = 0;
+            for (int i = 0; i < arr.length() && tried < 6; i++) {
+                String host = arr.getJSONArray(i).optString(0);
+                JSONObject meta = arr.getJSONArray(i).optJSONObject(1);
+                if (host.isEmpty() || meta == null || !meta.optBoolean("api", false)) continue;
+                tried++;
+                try {
+                    debugJs("Java: Invidious " + host + "...");
+                    JSONObject v = new JSONObject(httpGet("https://" + host + "/api/v1/videos/" + id));
+                    String url = pickInvidious(v, host);
+                    if (url != null) {
+                        debugJs("Java: Invidious OK ✔ " + host);
+                        return buildOut(url, v.optString("title", ""), v.optString("author", ""));
                     }
-                }
-                if (url == null) {
-                    JSONArray fm = sd.optJSONArray("formats");
-                    if (fm != null) for (int i = 0; i < fm.length(); i++) {
-                        JSONObject f = fm.getJSONObject(i);
-                        if (f.has("url")) { url = f.getString("url"); break; }
+                } catch (Exception e) {}
+            }
+        } catch (Exception e) {}
+        try {
+            JSONArray arr = new JSONArray(httpGet("https://piped-instances.kavin.rocks/"));
+            int tried = 0;
+            for (int i = 0; i < arr.length() && tried < 6; i++) {
+                String api = arr.getJSONObject(i).optString("api_url", "");
+                if (api.isEmpty()) continue;
+                tried++;
+                try {
+                    debugJs("Java: Piped " + api.replace("https://", "") + "...");
+                    JSONObject v = new JSONObject(httpGet(api + "/streams/" + id));
+                    String url = pickPiped(v);
+                    if (url != null) {
+                        debugJs("Java: Piped OK ✔");
+                        return buildOut(url, v.optString("title", ""), v.optString("uploader", ""));
                     }
-                }
-                if (url != null) {
-                    JSONObject out = new JSONObject();
-                    out.put("url", url);
-                    JSONObject vd = j.optJSONObject("videoDetails");
-                    out.put("title", vd != null ? vd.optString("title", "") : "");
-                    out.put("author", vd != null ? vd.optString("author", "") : "");
-                    return out.toString();
-                }
-            } catch (Exception e) { /* siguiente client */ }
+                } catch (Exception e) {}
+            }
+        } catch (Exception e) {}
+        return null;
+    }
+
+    private String pickInvidious(JSONObject v, String host) {
+        String fallback = null;
+        JSONArray ad = v.optJSONArray("adaptiveFormats");
+        if (ad != null) {
+            for (int i = 0; i < ad.length(); i++) {
+                JSONObject f = ad.getJSONObject(i);
+                String t = f.optString("type", "");
+                String u = f.optString("url", "");
+                if (u.isEmpty()) continue;
+                if (u.startsWith("/")) u = "https://" + host + u;
+                if (t.startsWith("audio/mp4")) return u;
+                if (fallback == null && t.startsWith("audio")) fallback = u;
+            }
+        }
+        if (fallback != null) return fallback;
+        JSONArray fs = v.optJSONArray("formatStreams");
+        if (fs != null && fs.length() > 0) {
+            String u = fs.getJSONObject(0).optString("url", "");
+            if (u.startsWith("/")) u = "https://" + host + u;
+            if (!u.isEmpty()) return u;
         }
         return null;
+    }
+
+    private String pickPiped(JSONObject v) {
+        JSONArray as = v.optJSONArray("audioStreams");
+        String best = null;
+        int bestBr = -1;
+        if (as != null) for (int i = 0; i < as.length(); i++) {
+            JSONObject f = as.getJSONObject(i);
+            String u = f.optString("url", "");
+            if (u.isEmpty()) continue;
+            int br = f.optInt("bitrate", 0);
+            if (br > bestBr) { bestBr = br; best = u; }
+        }
+        return best;
+    }
+
+    private String buildOut(String url, String title, String author) {
+        try {
+            JSONObject out = new JSONObject();
+            out.put("url", url);
+            out.put("title", title);
+            out.put("author", author);
+            return out.toString();
+        } catch (Exception e) { return null; }
+    }
+
+    private String httpGet(String urlStr) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(urlStr).openConnection();
+        c.setConnectTimeout(6000);
+        c.setReadTimeout(8000);
+        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/120 Mobile");
+        int code = c.getResponseCode();
+        if (code != 200) throw new Exception("http " + code);
+        return readAll(c.getInputStream());
     }
 
     private String readAll(InputStream is) throws Exception {
