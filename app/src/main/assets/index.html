@@ -296,7 +296,7 @@
     transition: all 0.3s;
   }
   .led.stream { background: #39d353; box-shadow: 0 0 8px #39d353, inset 0 0 2px rgba(255,255,255,0.6); }
-  .led.iframe, .led.embed { background: #ffb020; box-shadow: 0 0 8px #ffb020, inset 0 0 2px rgba(255,255,255,0.6); }
+  .led.iframe, .led.embed, .led.bridge { background: #ffb020; box-shadow: 0 0 8px #ffb020, inset 0 0 2px rgba(255,255,255,0.6); }
 
   .buttons-area { margin-top: 10px; padding: 0 4px; }
 
@@ -803,6 +803,7 @@
 
 <script>
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
+const HAS_BRIDGE = typeof Android !== 'undefined';   /* WebView de fondo en Java */
 
 /* ============ DEBUG ============ */
 const debugEl = document.getElementById('debugIndicator');
@@ -985,20 +986,46 @@ const soundFab = document.getElementById('soundFab');
 
 let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
+let embedFrame = null, embedPos = 0, embedTimer = null;
+
+/* ---- Estado reportado por el WebView de fondo (Java) ---- */
+window.onBridgeState = function (s) {
+  if (mode !== 'bridge') return;
+  if (!s) return;
+  let d = s;
+  if (typeof s === 'string') { try { d = JSON.parse(s); } catch (e) { return; } }
+  if (d.e) { stopEmbedClock(); autoNext(); return; }
+  setReels(!d.p);
+  embedPos = Math.floor(d.t || 0);
+};
+
+/* ---- FALLBACK unificado: bridge (Android) o iframe (escritorio) ---- */
+function fbLoad(id) {
+  if (HAS_BRIDGE) {
+    mode = 'bridge';
+    debug('Bridge WebView: cargando YouTube...');
+    Android.playYT(id);
+    startEmbedClock();
+  } else {
+    mode = 'embed';
+    embedLoad(id, true);
+  }
+  setLed(mode);
+  setReels(true);
+}
+function fbPlay()  { if (mode === 'bridge') Android.resumeYT(); else { embedCmd('unMute'); embedCmd('playVideo'); } }
+function fbPause() { if (mode === 'bridge') Android.pauseYT(); else embedCmd('pauseVideo'); setReels(false); stopEmbedClock(); }
+function fbStop()  { if (mode === 'bridge') Android.stopYT(); else embedCmd('stopVideo'); setReels(false); stopEmbedClock(); }
+function fbSeek(s) { if (mode === 'bridge') Android.seekYT(s); else { embedPos = s; embedCmd('seekTo', [s, true]); } }
+function fbUnmute(){ if (mode === 'bridge') Android.unmuteYT(); else { embedCmd('unMute'); embedCmd('setVolume', [100]); } }
 
 soundFab.onclick = () => {
-  if (mode === 'embed') {
-    embedCmd('unMute'); embedCmd('setVolume', [100]); embedCmd('playVideo');
-    setReels(true);
-  } else if (mode === 'stream') {
-    audio.play().catch(() => {});
-  }
+  if (mode === 'bridge' || mode === 'embed') { fbUnmute(); fbPlay(); setReels(true); }
+  else if (mode === 'stream') { audio.play().catch(() => {}); }
   soundFab.classList.remove('show');
 };
 
-/* ---- EMBED ---- */
-let embedFrame = null, embedPos = 0, embedTimer = null;
-
+/* ---- iframe embed (solo escritorio) ---- */
 function ensureEmbed() {
   if (embedFrame) return embedFrame;
   const f = document.createElement('iframe');
@@ -1107,7 +1134,7 @@ function setReels(on) {
   reelR.classList.toggle('playing', on);
 }
 function setLed(m) {
-  modeLed.className = 'led' + (m === 'stream' ? ' stream' : (m === 'iframe' || m === 'embed') ? ' iframe' : '');
+  modeLed.className = 'led' + (m === 'stream' ? ' stream' : (m === 'iframe' || m === 'embed' || m === 'bridge') ? ' iframe' : '');
 }
 function extractVideoId(str) {
   str = (str || '').trim();
@@ -1116,7 +1143,7 @@ function extractVideoId(str) {
   return m ? m[1] : null;
 }
 
-/* ============ 🌐 LISTAS DE INSTANCIAS VIVAS (uptime oficial) ============ */
+/* ============ LISTAS DE INSTANCIAS VIVAS ============ */
 let listsPromise = null;
 function loadLists() {
   if (listsPromise) return listsPromise;
@@ -1128,7 +1155,7 @@ function loadLists() {
       const j = await r.json();
       const apis = (Array.isArray(j) ? j : []).map(x => x.api_url).filter(Boolean);
       if (apis.length) piped = apis;
-    } catch (e) { debug('Lista Piped no cargó'); }
+    } catch (e) {}
     try {
       const r = await fetchSmart('https://api.invidious.io/instances.json?sort_by=health', 5000);
       const j = await r.json();
@@ -1136,14 +1163,14 @@ function loadLists() {
         .filter(x => x && x[1] && x[1].api && x[1].cors !== false)
         .map(x => 'https://' + x[0]);
       if (apis.length) inv = apis;
-    } catch (e) { debug('Lista Invidious no cargó'); }
+    } catch (e) {}
     debug('Instancias vivas: ' + piped.length + ' Piped · ' + inv.length + ' Invidious');
     return { piped, inv };
   })();
   return listsPromise;
 }
 
-/* ============ 🎯 FUENTE NATIVA YouTube (client ANDROID) ============ */
+/* ============ FUENTE NATIVA YouTube ============ */
 const YT_CLIENTS = [
   { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
     userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
@@ -1244,7 +1271,7 @@ async function enrichMeta(id, fallbackTitle) {
   return { title: finalTitle, author: finalAuthor };
 }
 
-/* ============ BÚSQUEDA (con instancias vivas) ============ */
+/* ============ BÚSQUEDA ============ */
 async function pipedSearch(q) {
   const { piped } = await loadLists();
   for (const base of piped.slice(0, 3)) {
@@ -1347,7 +1374,7 @@ async function searchMusic(q) {
   }
 }
 
-/* ============ STREAMS (con instancias vivas) ============ */
+/* ============ STREAMS ============ */
 function pickFormats(j, id) {
   if (!j) return null;
   const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
@@ -1365,7 +1392,7 @@ async function pipedStream(id) {
     try {
       const j = await (await fetchSmart(base + '/streams/' + id, 5000)).json();
       const out = pickFormats(j, id);
-      if (out) { debug('Stream vía Piped: ' + base.replace('https://', '')); return out; }
+      if (out) { debug('Stream vía Piped'); return out; }
     } catch (e) {}
   }
   return null;
@@ -1376,7 +1403,7 @@ async function invidiousStream(id) {
     try {
       const j = await (await fetchSmart(base + '/api/v1/videos/' + id, 5000)).json();
       const out = pickFormats(j, id);
-      if (out) { debug('Stream vía Invidious: ' + base.replace('https://', '')); return out; }
+      if (out) { debug('Stream vía Invidious'); return out; }
     } catch (e) {}
   }
   return null;
@@ -1417,7 +1444,7 @@ function startStream(url, title, src) {
   setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
   audio.play().then(() => {
-    debug('🔊 SONANDO');
+    debug('🔊 SONANDO (stream)');
   }).catch(() => {
     debug('Autoplay bloqueado: pulsa ▶');
     soundFab.classList.add('show');
@@ -1447,7 +1474,7 @@ async function playById(id, title, thumb, author) {
   }
 
   /* 2) carrera de streams */
-  debug('Buscando stream (instancias vivas)...');
+  debug('Buscando stream...');
   const src = await raceStreams(id, 12000);
   if (my !== playToken) return;
 
@@ -1457,12 +1484,10 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 3) embed último recurso */
-  debug('Sin stream → embed fallback');
-  mode = 'embed'; setLed('embed');
-  embedLoad(id, true);
-  setReels(true);
-  setTimeout(() => { if (my === playToken && mode === 'embed') soundFab.classList.add('show'); }, 3000);
+  /* 3) FALLBACK: WebView de fondo (Android) o iframe (escritorio) */
+  debug('Sin stream → reproductor de fondo');
+  fbLoad(id);
+  setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
   enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
 }
 
@@ -1502,24 +1527,20 @@ function doPlay() {
   if (mode === 'stream') {
     audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo'));
   }
-  else if (mode === 'embed') {
-    embedCmd('unMute');
-    embedCmd('setVolume', [100]);
-    if (embedFrame && embedFrame.src && embedFrame.src !== 'about:blank') {
-      embedCmd('playVideo'); setReels(true); startEmbedClock();
-    } else if (current.id) { embedLoad(current.id, true); setReels(true); }
+  else if (mode === 'bridge' || mode === 'embed') {
+    fbPlay(); setReels(true); startEmbedClock();
     soundFab.classList.remove('show');
   }
   else if (mode === 'iframe') ytPlayer && ytPlayer.playVideo();
 }
 function doPause() {
   if (mode === 'stream') audio.pause();
-  else if (mode === 'embed') { embedCmd('pauseVideo'); setReels(false); stopEmbedClock(); }
+  else if (mode === 'bridge' || mode === 'embed') fbPause();
   else if (mode === 'iframe') ytPlayer && ytPlayer.pauseVideo();
 }
 function doStop() {
   if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
-  else if (mode === 'embed') { embedCmd('stopVideo'); setReels(false); stopEmbedClock(); }
+  else if (mode === 'bridge' || mode === 'embed') fbStop();
   else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
   setReels(false);
   soundFab.classList.remove('show');
@@ -1527,9 +1548,9 @@ function doStop() {
 function doSeek(delta) {
   if (mode === 'stream') {
     audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + delta));
-  } else if (mode === 'embed') {
-    embedPos = Math.max(0, embedPos + delta);
-    embedCmd('seekTo', [embedPos, true]);
+  } else if (mode === 'bridge' || mode === 'embed') {
+    const s = Math.max(0, embedPos + delta);
+    fbSeek(s);
   } else if (mode === 'iframe' && ytPlayer && ytPlayer.getCurrentTime) {
     ytPlayer.seekTo(Math.max(0, ytPlayer.getCurrentTime() + delta), true);
   }
@@ -1588,7 +1609,7 @@ document.getElementById('urlInput').addEventListener('keypress', e => {
 /* Init */
 updatePlBar();
 renderPL();
-debug('Listo · ' + (IS_ANDROID ? 'Android' : 'Desktop'));
+debug('Listo · ' + (HAS_BRIDGE ? 'Android + Bridge' : (IS_ANDROID ? 'Android' : 'Desktop')));
 </script>
 
 </body>
