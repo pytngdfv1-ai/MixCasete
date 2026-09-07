@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         runOnUiThread(() -> wv.evaluateJavascript("debug('" + m + "')", null));
     }
 
-    /* ================= PUENTE (Android.xxxx desde JS) ================= */
+    /* ================= PUENTE ================= */
     public class Bridge {
 
         @JavascriptInterface
@@ -141,29 +141,25 @@ public class MainActivity extends Activity {
             }).start();
         }
 
+        /* Página WATCH real (nunca da Error 153, a diferencia del embed) */
+        private String watchUrl(String id) {
+            return "https://www.youtube.com/watch?v=" + id + "&playsinline=1";
+        }
+
         @JavascriptInterface
         public void playYT(final String id) {
             lastId = id;
             noVideoCount = 0;
             triedAlt = false;
-            runOnUiThread(() -> playerWv.loadUrl("https://www.youtube.com/embed/" + id +
-                    "?autoplay=1&controls=0&playsinline=1&rel=0&mute=0"));
+            runOnUiThread(() -> playerWv.loadUrl(watchUrl(id)));
         }
 
-        @JavascriptInterface public void resumeYT() { runOnUiThread(() -> { tap(); enforce(); }); }
-        @JavascriptInterface public void pauseYT() { js("(function(){var v=document.querySelector('video');if(v)v.pause();})();"); }
-        @JavascriptInterface public void stopYT()  { runOnUiThread(() -> { polling = false; playerWv.loadUrl("about:blank"); }); }
-        @JavascriptInterface public void seekYT(final int sec) { js("(function(){var v=document.querySelector('video');if(v)v.currentTime=" + sec + ";})();"); }
-        @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
-
-        /* ========= NUEVOS: modo video visible (toggle 📺/💿) ========= */
         @JavascriptInterface
         public void loadVideo(final String id) {
             lastId = id;
             noVideoCount = 0;
             triedAlt = false;
-            runOnUiThread(() -> playerWv.loadUrl("https://www.youtube.com/embed/" + id +
-                    "?autoplay=1&playsinline=1&rel=0&mute=0"));
+            runOnUiThread(() -> playerWv.loadUrl(watchUrl(id)));
         }
 
         @JavascriptInterface
@@ -194,20 +190,25 @@ public class MainActivity extends Activity {
                     lp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.END;
                     lp.setMargins(dp(8), dp(8), dp(8), dp(90));
                     playerWv.setLayoutParams(lp);
-                    playerWv.loadUrl("https://www.youtube.com/embed/" + id +
-                            "?autoplay=1&playsinline=1&rel=0");
+                    playerWv.loadUrl(watchUrl(id));
                 } else {
                     playerWv.setLayoutParams(new FrameLayout.LayoutParams(2, 2));
                 }
             });
         }
+
+        @JavascriptInterface public void resumeYT() { runOnUiThread(() -> { tap(); enforce(); }); }
+        @JavascriptInterface public void pauseYT() { js("(function(){var v=document.querySelector('video');if(v)v.pause();})();"); }
+        @JavascriptInterface public void stopYT()  { runOnUiThread(() -> { polling = false; playerWv.loadUrl("about:blank"); }); }
+        @JavascriptInterface public void seekYT(final int sec) { js("(function(){var v=document.querySelector('video');if(v)v.currentTime=" + sec + ";})();"); }
+        @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
-    /* ============ NEWPIPE EXTRACTOR ============ */
+    /* ============ NEWPIPE ============ */
     private synchronized void ensureNewPipe() {
         if (!npInit) {
             try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
@@ -456,11 +457,19 @@ public class MainActivity extends Activity {
         return bo.toString("UTF-8");
     }
 
-    /* ============ WEBVIEW DE FONDO ============ */
+    /* ============ WEBVIEW DE FONDO (página watch) ============ */
     private class PlayerClient extends WebViewClient {
         @Override
         public void onPageFinished(WebView view, String url) {
-            if (url.contains("/embed/") || url.contains("youtube-nocookie")) {
+            if (url.contains("youtube.com/watch") || url.contains("youtu.be/")) {
+                injectWatchCss();
+                tap();
+                enforce();
+                view.postDelayed(() -> { injectWatchCss(); tap(); enforce(); }, 700);
+                view.postDelayed(() -> enforce(), 1800);
+                view.postDelayed(() -> enforce(), 3500);
+                startPoll();
+            } else if (url.contains("/embed/") || url.contains("youtube-nocookie")) {
                 tap();
                 enforce();
                 view.postDelayed(() -> { tap(); enforce(); }, 700);
@@ -469,6 +478,15 @@ public class MainActivity extends Activity {
                 startPoll();
             }
         }
+    }
+
+    /* Oculta todo menos el reproductor de la página watch */
+    private void injectWatchCss() {
+        playerWv.evaluateJavascript(
+            "(function(){if(document.getElementById('mcCss'))return;" +
+            "var s=document.createElement('style');s.id='mcCss';" +
+            "s.textContent='ytd-masthead,#masthead,#comments,ytd-comments,#related,ytd-related,#secondary,#below,#chat,ytd-live-chat-frame,#subscribe-button,ytd-reel-shelf-renderer{display:none!important}';" +
+            "document.head.appendChild(s);window.scrollTo(0,0);})()", null);
     }
 
     private void tap() {
