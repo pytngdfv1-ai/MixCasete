@@ -84,7 +84,6 @@
     width: 100%; height: 100%;
     object-fit: cover; object-position: center; display: block;
     pointer-events: none;
-    transition: opacity 0.25s;
   }
 
   .album-square::after {
@@ -101,17 +100,6 @@
     padding: 4px 7px; border-radius: 10px;
     pointer-events: none;
   }
-
-  .view-toggle {
-    position: absolute; right: 8px; top: 8px; z-index: 3;
-    width: 36px; height: 36px; border-radius: 50%;
-    border: 1px solid rgba(0,0,0,0.35);
-    background: rgba(0,0,0,0.5); color: #fff; font-size: 16px;
-    cursor: pointer;
-  }
-  .album-square.video-on img { opacity: 0; }
-  .album-square.video-on::after { display: none; }
-  .album-square.video-on .zoom-hint { display: none; }
 
   .cassette-window {
     margin: 14px 6px 0 6px;
@@ -408,7 +396,7 @@
   }
   .sound-fab.show { display: block; animation: blink 1s infinite; }
 
-  /* Debug: SOLO consola, el cartel verde ya no se muestra */
+  /* Debug: solo consola, invisible en pantalla */
   .debug-indicator { display: none !important; }
 
   .search-overlay, .playlist-overlay {
@@ -668,7 +656,6 @@
   <div class="album-area">
     <div class="album-square" id="albumSquare">
       <img id="albumImg" src="https://image.qwenlm.ai/public_source/73f575de-f2a3-4b64-b512-110b8807a7bd/1821418eb-dd31-4840-83e9-c11413ca3667.png" alt="Album">
-      <button class="view-toggle" id="viewToggle">📺</button>
       <span class="zoom-hint">🔍 VER</span>
     </div>
   </div>
@@ -810,8 +797,7 @@
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const HAS_BRIDGE = typeof Android !== 'undefined';
 
-/* ============ DEBUG (solo consola, invisible en pantalla) ============ */
-const debugEl = document.getElementById('debugIndicator');
+/* ============ DEBUG (solo consola) ============ */
 function debug(msg) {
   console.log('[DEBUG]', msg);
 }
@@ -833,14 +819,12 @@ const coverOverlay = document.getElementById('coverOverlay');
 const coverFullImg = document.getElementById('coverFullImg');
 const zoomLevelEl = document.getElementById('zoomLevel');
 const albumSquare = document.getElementById('albumSquare');
-const viewToggle = document.getElementById('viewToggle');
 
 let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
 let embedFrame = null, embedPos = 0, embedTimer = null;
 let current = { id: null, title: '', author: '', thumb: '' };
 let playToken = 0;
-let videoMode = false;
 
 /* ============ STREAM VÍA JAVA ============ */
 function bridgeGetStream(id) {
@@ -862,7 +846,7 @@ window.onDownloaded = function (id, path) {
   }
 };
 
-/* ============ COVER FULLSCREEN + ZOOM ============ */
+/* ============ COVER FULLSCREEN + ZOOM (solo cover art, sin video) ============ */
 const cov = { s: 1, tx: 0, ty: 0 };
 function applyCov() {
   coverFullImg.style.transform = 'translate(' + cov.tx + 'px,' + cov.ty + 'px) scale(' + cov.s + ')';
@@ -880,7 +864,6 @@ function setZoom(ns) {
   clampCov(); applyCov();
 }
 albumSquare.addEventListener('click', () => {
-  if (videoMode) return;
   coverFullImg.src = albumImg.src;
   cov.s = 1; cov.tx = 0; cov.ty = 0; applyCov();
   coverOverlay.classList.add('open');
@@ -917,43 +900,6 @@ coverFullImg.addEventListener('pointermove', e => {
 ['pointerup', 'pointercancel'].forEach(ev =>
   coverFullImg.addEventListener(ev, e => { pts.delete(e.pointerId); pan0 = null; pinch0 = 0; })
 );
-
-/* ============ MODO VIDEO / COVER (📺/💿) ============ */
-function placeVideoRect() {
-  if (!HAS_BRIDGE) return;
-  const r = albumSquare.getBoundingClientRect();
-  try { Android.placeVideo(r.left, r.top, r.width, r.height); } catch (e) {}
-}
-function refreshVideo() {
-  if (!current.id) return;
-  if (HAS_BRIDGE) {
-    placeVideoRect();
-    try { Android.loadVideo(current.id); } catch (e) {}
-  } else {
-    let f = document.getElementById('webVideoFrame');
-    if (!f) {
-      f = document.createElement('iframe');
-      f.id = 'webVideoFrame';
-      f.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
-      f.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:12px;';
-      albumSquare.appendChild(f);
-    }
-    f.style.display = 'block';
-    f.src = 'https://www.youtube.com/embed/' + current.id + '?playsinline=1&rel=0';
-  }
-}
-function setVideoMode(on) {
-  videoMode = on;
-  viewToggle.textContent = on ? '💿' : '📺';
-  albumSquare.classList.toggle('video-on', on);
-  if (on) {
-    refreshVideo();
-  } else {
-    if (HAS_BRIDGE) { try { Android.hideVideo(); } catch (e) {} }
-    else { const f = document.getElementById('webVideoFrame'); if (f) f.style.display = 'none'; }
-  }
-}
-viewToggle.onclick = (e) => { e.stopPropagation(); setVideoMode(!videoMode); };
 
 /* ============ CACHE ============ */
 const CACHE_KEY = 'mixcasete_cache_v1';
@@ -1035,7 +981,7 @@ function flashTitle(msg) {
   flashTimer = setTimeout(() => { showTitle(current.title || '—'); }, 2200);
 }
 
-/* ============ REC ============ */
+/* ============ REC: guarda en playlist + intenta descarga real ============ */
 function recToPlaylist() {
   const dot = document.getElementById('plRecDot');
   if (!current.id || !current.title) { flashTitle('⚠️ Nada sonando para grabar'); return; }
@@ -1135,7 +1081,7 @@ window.onBridgeState = function (s) {
   embedPos = Math.floor(d.t || 0);
 };
 
-/* ============ FALLBACK unificado ============ */
+/* ============ FALLBACK (player oculto, sin video visible) ============ */
 function fbLoad(id) {
   if (HAS_BRIDGE) {
     mode = 'bridge';
@@ -1155,17 +1101,16 @@ function fbStop()  { if (mode === 'bridge') Android.stopYT(); else embedCmd('sto
 function fbSeek(s) { if (mode === 'bridge') Android.seekYT(s); else { embedPos = s; embedCmd('seekTo', [s, true]); } }
 function fbUnmute(){ if (mode === 'bridge') Android.unmuteYT(); else { embedCmd('unMute'); embedCmd('setVolume', [100]); } }
 
-/* 🔊 ya no muestra rectángulo flotante: activa el modo video sobre el cover */
+/* 🔊 solo desmutea/reanuda el player oculto (nunca muestra video) */
 soundFab.onclick = () => {
   if (mode === 'bridge' || mode === 'embed') {
-    if (!videoMode) setVideoMode(true);
     fbUnmute(); fbPlay(); setReels(true);
   }
   else if (mode === 'stream') { audio.play().catch(() => {}); }
   soundFab.classList.remove('show');
 };
 
-/* ============ IFRAME EMBED (escritorio) ============ */
+/* ============ IFRAME EMBED (escritorio, invisible) ============ */
 function ensureEmbed() {
   if (embedFrame) return embedFrame;
   const f = document.createElement('iframe');
@@ -1542,18 +1487,7 @@ async function playById(id, title, thumb, author) {
   } else if (thumb) { albumImg.src = thumb; }
   setCoverHQ(id, title || (c && c.title) || '');
 
-  /* MODO VIDEO: el player visible pone el audio */
-  if (videoMode) {
-    debug('Modo video activo 📺');
-    refreshVideo();
-    mode = HAS_BRIDGE ? 'bridge' : 'embed';
-    setLed(mode);
-    setReels(true);
-    enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
-    return;
-  }
-
-  /* 1) archivo LOCAL */
+  /* 1) archivo LOCAL descargado (offline) */
   const localItem = playlist.find(t => t.id === id);
   if (localItem && localItem.local) {
     debug('Reproduciendo desde almacenamiento local 💾');
@@ -1590,10 +1524,10 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 5) fallback WebView/iframe (invisible si no estás en modo video) */
+  /* 5) fallback: player oculto (nunca se ve video) */
   debug('Sin stream → reproductor de fondo');
   fbLoad(id);
-  setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed') && !videoMode) soundFab.classList.add('show'); }, 3500);
+  setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
   enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
 }
 
@@ -1646,10 +1580,7 @@ function doPause() {
 }
 function doStop() {
   if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
-  else if (mode === 'bridge' || mode === 'embed') {
-    fbStop();
-    if (!videoMode) { try { Android.hideVideo(); } catch (e) {} }
-  }
+  else if (mode === 'bridge' || mode === 'embed') fbStop();
   else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
   setReels(false);
   soundFab.classList.remove('show');
