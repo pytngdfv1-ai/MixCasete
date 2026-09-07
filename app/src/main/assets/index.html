@@ -63,6 +63,17 @@
     box-shadow: inset 0 2px 3px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.5);
   }
 
+  /* Botón de tema */
+  .theme-toggle {
+    position: absolute; top: 26px; right: 14px; z-index: 6;
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.25);
+    background: rgba(0,0,0,0.18);
+    font-size: 16px; line-height: 1;
+    cursor: pointer;
+  }
+  .theme-toggle:active { transform: scale(0.92); }
+
   .album-area { flex: none; margin: 16px 6px 0 6px; }
 
   .album-square {
@@ -396,7 +407,6 @@
   }
   .sound-fab.show { display: block; animation: blink 1s infinite; }
 
-  /* Debug: solo consola, invisible en pantalla */
   .debug-indicator { display: none !important; }
 
   .search-overlay, .playlist-overlay {
@@ -541,20 +551,25 @@
   .pl-btn.play { color: #2e7d32; }
   .pl-btn.del { color: #c0392b; }
 
-  .pl-footer { display: flex; gap: 8px; margin-top: 12px; }
+  .pl-footer { display: flex; gap: 6px; margin-top: 12px; }
   .pl-clear {
     flex: 1;
-    padding: 11px;
+    padding: 11px 4px;
     background: linear-gradient(180deg, #e57373 0%, #c0392b 100%);
     border: 2px solid #8e2b20;
     border-radius: 8px;
     color: #fff;
     font-family: 'Montserrat', sans-serif;
-    font-weight: 800; font-size: 11px; letter-spacing: 1px;
+    font-weight: 800; font-size: 10px; letter-spacing: 0.5px;
     cursor: pointer;
     box-shadow: 0 3px 0 #8e2b20;
   }
   .pl-clear:active { transform: translateY(2px); box-shadow: none; }
+  .pl-clear.blue {
+    background: linear-gradient(180deg, #64b5f6 0%, #1976d2 100%);
+    border-color: #0d47a1;
+    box-shadow: 0 3px 0 #0d47a1;
+  }
 
   .cover-overlay {
     position: fixed; inset: 0; z-index: 300;
@@ -612,6 +627,106 @@
     font-size: 12px;
     pointer-events: none;
   }
+
+  /* ============================================================
+     🌙 MODO OSCURO — overrides
+     ============================================================ */
+  body.dark { background: radial-gradient(circle at 50% 30%, #191613 0%, #0c0a09 70%, #060505 100%); }
+
+  body.dark .device {
+    background:
+      radial-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+      linear-gradient(180deg, #2b2825 0%, #201d1a 45%, #171512 100%);
+    background-size: 3px 3px, auto;
+    box-shadow:
+      inset 0 2px 3px rgba(255,255,255,0.06),
+      inset 0 -3px 6px rgba(0,0,0,0.5),
+      0 30px 60px rgba(0,0,0,0.85),
+      0 0 0 2px #000,
+      0 0 0 5px #3d3831;
+  }
+
+  body.dark .theme-toggle {
+    background: rgba(255,255,255,0.12);
+    border-color: rgba(255,255,255,0.25);
+  }
+
+  body.dark .top-grille { box-shadow: inset 0 2px 3px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.08); }
+
+  body.dark .album-square { background: #141210; box-shadow: inset 0 0 0 2px rgba(0,0,0,0.5), 0 4px 12px rgba(0,0,0,0.6); }
+  body.dark .zoom-hint { background: rgba(0,0,0,0.6); }
+
+  body.dark .cassette-window { box-shadow: inset 0 0 0 2px #000, inset 0 4px 10px rgba(0,0,0,0.95), 0 3px 6px rgba(0,0,0,0.6); }
+
+  body.dark .cassette-label {
+    background: linear-gradient(180deg, #262320 0%, #201d1a 70%, #1a1815 100%);
+    box-shadow: inset 0 -3px 5px rgba(0,0,0,0.4);
+  }
+  body.dark .track-title { color: #f0e8d8; text-shadow: 0 1px 0 rgba(0,0,0,0.7); }
+
+  body.dark .cassette-body { filter: saturate(0.92) brightness(0.94); }
+
+  body.dark .cassette-brand { color: #e8c07a; text-shadow: 0 1px 0 rgba(0,0,0,0.6); }
+
+  body.dark .search-strip {
+    background: linear-gradient(180deg, #2e2a26 0%, #262220 100%);
+    border-color: #4a443c;
+    color: #d8c9a8;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.08), 0 2px 3px rgba(0,0,0,0.4);
+  }
+
+  body.dark .btn-top {
+    background: linear-gradient(180deg, #332f2b 0%, #2a2724 100%);
+    border-color: #4a443c;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.4);
+  }
+  body.dark .button-label { color: #cbbfa8; }
+
+  body.dark .piano-btn {
+    background: linear-gradient(180deg, #3b3630 0%, #322e29 45%, #2a2622 100%);
+    box-shadow:
+      inset 0 2px 1px rgba(255,255,255,0.12),
+      inset 0 -3px 4px rgba(0,0,0,0.35),
+      0 3px 4px rgba(0,0,0,0.6);
+  }
+  body.dark .piano-btn:active, body.dark .piano-btn.active {
+    background: linear-gradient(180deg, #322e29 0%, #2a2622 50%, #24211d 100%);
+    box-shadow: inset 0 2px 3px rgba(0,0,0,0.45), 0 1px 1px rgba(0,0,0,0.5);
+  }
+  body.dark .piano-btn .btn-icon { color: #d8c9a8; opacity: 0.8; }
+
+  body.dark .search-panel, body.dark .playlist-panel {
+    background: linear-gradient(180deg, #262320 0%, #1e1b18 100%);
+  }
+  body.dark .panel-handle { background: #4a443c; }
+  body.dark .panel-title { color: #d8c9a8; }
+
+  body.dark .search-input {
+    background: #191714;
+    border-color: #4a443c;
+    color: #eee6d6;
+  }
+  body.dark .search-input:focus { border-color: #f0872c; }
+  body.dark .url-divider { color: #8a7a5c; }
+
+  body.dark .result-item { background: #2e2a26; border-color: #4a443c; }
+  body.dark .result-item:active { background: #3a352f; }
+  body.dark .result-title { color: #eee6d6; }
+  body.dark .result-meta { color: #a89877; }
+  body.dark .result-status { color: #bfae8d; }
+
+  body.dark .pl-item { background: #2e2a26; border-color: #4a443c; }
+  body.dark .pl-item.current { border-color: #f0872c; background: #332e28; }
+  body.dark .pl-title { color: #eee6d6; }
+  body.dark .pl-author { color: #a89877; }
+  body.dark .pl-btn {
+    background: linear-gradient(180deg, #3b3630 0%, #2e2a26 100%);
+    border-color: #4a443c;
+    color: #d8c9a8;
+    box-shadow: 0 2px 0 #171512;
+  }
+  body.dark .pl-btn.play { color: #7ddc84; }
+  body.dark .pl-btn.del { color: #ff7b6b; }
 </style>
 </head>
 <body>
@@ -649,6 +764,7 @@
 <div class="debug-indicator" id="debugIndicator"></div>
 
 <div class="device" id="device">
+  <button class="theme-toggle" id="themeToggle" title="Modo oscuro / claro">🌙</button>
   <div class="top-grille"></div>
   <div class="side-knob"></div>
   <div class="side-grille"></div>
@@ -774,8 +890,11 @@
     <div class="panel-title">🎙️ MI PLAYLIST · GRABADA EN ESTE CASSETTE</div>
     <div class="pl-list" id="plList"></div>
     <div class="pl-footer">
-      <button class="pl-clear" id="plClear">🗑 VACIAR PLAYLIST</button>
+      <button class="pl-clear blue" id="plExport">⬆ EXPORTAR</button>
+      <button class="pl-clear blue" id="plImport">⬇ IMPORTAR</button>
+      <button class="pl-clear" id="plClear">🗑 VACIAR</button>
     </div>
+    <input type="file" id="fileImport" accept=".json,application/json" style="display:none">
   </div>
 </div>
 
@@ -819,12 +938,26 @@ const coverOverlay = document.getElementById('coverOverlay');
 const coverFullImg = document.getElementById('coverFullImg');
 const zoomLevelEl = document.getElementById('zoomLevel');
 const albumSquare = document.getElementById('albumSquare');
+const themeToggle = document.getElementById('themeToggle');
 
 let mode = 'none';
 let ytPlayer = null, ytReady = false, ytQueue = null;
 let embedFrame = null, embedPos = 0, embedTimer = null;
 let current = { id: null, title: '', author: '', thumb: '' };
 let playToken = 0;
+
+/* ============ 🌙 TEMA CLARO / OSCURO (persistente) ============ */
+function applyTheme(dark) {
+  document.body.classList.toggle('dark', dark);
+  themeToggle.textContent = dark ? '☀️' : '🌙';
+  try { localStorage.setItem('mixcasete_theme', dark ? 'dark' : 'light'); } catch (e) {}
+}
+themeToggle.onclick = () => applyTheme(!document.body.classList.contains('dark'));
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem('mixcasete_theme'); } catch (e) {}
+  applyTheme(saved === 'dark');
+})();
 
 /* ============ STREAM VÍA JAVA ============ */
 function bridgeGetStream(id) {
@@ -846,7 +979,7 @@ window.onDownloaded = function (id, path) {
   }
 };
 
-/* ============ COVER FULLSCREEN + ZOOM (solo cover art, sin video) ============ */
+/* ============ COVER FULLSCREEN + ZOOM ============ */
 const cov = { s: 1, tx: 0, ty: 0 };
 function applyCov() {
   coverFullImg.style.transform = 'translate(' + cov.tx + 'px,' + cov.ty + 'px) scale(' + cov.s + ')';
@@ -919,9 +1052,16 @@ const PL_KEY = 'mixcasete_playlist_v1';
 let playlist = [];
 try { playlist = JSON.parse(localStorage.getItem(PL_KEY)) || []; } catch (e) { playlist = []; }
 
+let backupTimer = null;
 function savePL() {
   localStorage.setItem(PL_KEY, JSON.stringify(playlist));
   updatePlBar(); renderPL();
+  if (HAS_BRIDGE) {
+    clearTimeout(backupTimer);
+    backupTimer = setTimeout(() => {
+      try { Android.exportPlaylist(playlistJson()); } catch (e) {}
+    }, 1500);
+  }
 }
 function updatePlBar() {
   document.getElementById('plBarText').textContent =
@@ -971,6 +1111,53 @@ document.getElementById('plOpen').onclick = () => { renderPL(); plOverlay.classL
 plOverlay.onclick = e => { if (e.target === plOverlay) plOverlay.classList.remove('open'); };
 function closePL() { plOverlay.classList.remove('open'); }
 
+/* ============ EXPORTAR / IMPORTAR PLAYLIST ============ */
+function playlistJson() {
+  return JSON.stringify({ app: 'MixCasete', version: 1,
+    exported: new Date().toISOString(), tracks: playlist });
+}
+function applyImport(text) {
+  try {
+    const d = JSON.parse(text);
+    const tracks = Array.isArray(d) ? d : (d.tracks || []);
+    const clean = tracks.filter(t => t && t.id).map(t => ({
+      id: t.id, title: t.title || '', author: t.author || '',
+      thumb: t.thumb || '', local: t.local || '' }));
+    if (!clean.length) { flashTitle('⚠ Archivo sin temas'); return; }
+    playlist = clean;
+    savePL();
+    flashTitle('📼 Playlist importada (' + clean.length + ' temas)');
+  } catch (e) { flashTitle('⚠ Archivo no válido'); }
+}
+document.getElementById('plExport').onclick = () => {
+  const json = playlistJson();
+  if (HAS_BRIDGE) {
+    try { Android.exportPlaylist(json); } catch (e) { flashTitle('⚠ No se pudo exportar'); }
+  } else {
+    const b = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b);
+    a.download = 'MixCasete_playlist.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    flashTitle('⬆ Playlist exportada');
+  }
+};
+document.getElementById('plImport').onclick = () => {
+  if (HAS_BRIDGE) { try { Android.openPlaylistFile(); } catch (e) {} }
+  else document.getElementById('fileImport').click();
+};
+document.getElementById('fileImport').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => applyImport(r.result);
+  r.readAsText(f);
+  e.target.value = '';
+};
+window.onPlaylistImported = text => applyImport(text);
+window.onExported = ok => flashTitle(ok ? '⬆ Guardada en Descargas ✔' : '⚠ No se pudo exportar');
+
 /* ============ TÍTULOS ============ */
 let flashTimer = null;
 function showTitle(t) { titleEl.textContent = t; }
@@ -981,7 +1168,7 @@ function flashTitle(msg) {
   flashTimer = setTimeout(() => { showTitle(current.title || '—'); }, 2200);
 }
 
-/* ============ REC: guarda en playlist + intenta descarga real ============ */
+/* ============ REC ============ */
 function recToPlaylist() {
   const dot = document.getElementById('plRecDot');
   if (!current.id || !current.title) { flashTitle('⚠️ Nada sonando para grabar'); return; }
@@ -1081,13 +1268,14 @@ window.onBridgeState = function (s) {
   embedPos = Math.floor(d.t || 0);
 };
 
-/* ============ FALLBACK (player oculto, sin video visible) ============ */
+/* ============ FALLBACK (player oculto) + SEGUNDO PLANO ============ */
 function fbLoad(id) {
   if (HAS_BRIDGE) {
     mode = 'bridge';
     debug('Bridge WebView: cargando YouTube...');
     Android.playYT(id);
     startEmbedClock();
+    try { Android.startForegroundSvc(); } catch (e) {}
   } else {
     mode = 'embed';
     embedLoad(id, true);
@@ -1101,7 +1289,6 @@ function fbStop()  { if (mode === 'bridge') Android.stopYT(); else embedCmd('sto
 function fbSeek(s) { if (mode === 'bridge') Android.seekYT(s); else { embedPos = s; embedCmd('seekTo', [s, true]); } }
 function fbUnmute(){ if (mode === 'bridge') Android.unmuteYT(); else { embedCmd('unMute'); embedCmd('setVolume', [100]); } }
 
-/* 🔊 solo desmutea/reanuda el player oculto (nunca muestra video) */
 soundFab.onclick = () => {
   if (mode === 'bridge' || mode === 'embed') {
     fbUnmute(); fbPlay(); setReels(true);
@@ -1464,6 +1651,7 @@ function startStream(url, title, src) {
   mode = 'stream'; setLed('stream');
   setRealTitle(title || (src && src.title));
   if (src && src.author) setArtist(src.author);
+  if (HAS_BRIDGE) { try { Android.startForegroundSvc(); } catch (e) {} }
   audio.play().then(() => {
     debug('🔊 SONANDO');
   }).catch(() => {
@@ -1524,7 +1712,7 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 5) fallback: player oculto (nunca se ve video) */
+  /* 5) fallback: player oculto + servicio de segundo plano */
   debug('Sin stream → reproductor de fondo');
   fbLoad(id);
   setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
@@ -1582,6 +1770,7 @@ function doStop() {
   if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
   else if (mode === 'bridge' || mode === 'embed') fbStop();
   else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
+  if (HAS_BRIDGE) { try { Android.stopForegroundSvc(); } catch (e) {} }
   setReels(false);
   soundFab.classList.remove('show');
 }
@@ -1658,6 +1847,9 @@ document.getElementById('urlInput').addEventListener('keypress', e => {
 /* ============ INIT ============ */
 updatePlBar();
 renderPL();
+if (HAS_BRIDGE && !playlist.length) {
+  try { Android.loadPlaylistBackup(); } catch (e) {}
+}
 debug('Listo · ' + (HAS_BRIDGE ? 'Android + Bridge' : (IS_ANDROID ? 'Android' : 'Desktop')));
 </script>
 
