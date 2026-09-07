@@ -102,7 +102,6 @@
     pointer-events: none;
   }
 
-  /* Toggle video/cover */
   .view-toggle {
     position: absolute; right: 8px; top: 8px; z-index: 3;
     width: 36px; height: 36px; border-radius: 50%;
@@ -409,16 +408,8 @@
   }
   .sound-fab.show { display: block; animation: blink 1s infinite; }
 
-  .debug-indicator {
-    position: fixed; left: 10px; top: 10px; z-index: 999;
-    background: rgba(0,0,0,0.8); color: #0f0;
-    padding: 6px 10px; border-radius: 4px;
-    font-family: 'Courier New', monospace;
-    font-size: 10px;
-    max-width: 90vw;
-    display: none;
-  }
-  .debug-indicator.show { display: block; }
+  /* Debug: SOLO consola, el cartel verde ya no se muestra */
+  .debug-indicator { display: none !important; }
 
   .search-overlay, .playlist-overlay {
     position: fixed; inset: 0; z-index: 100;
@@ -819,11 +810,9 @@
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const HAS_BRIDGE = typeof Android !== 'undefined';
 
-/* ============ DEBUG ============ */
+/* ============ DEBUG (solo consola, invisible en pantalla) ============ */
 const debugEl = document.getElementById('debugIndicator');
 function debug(msg) {
-  debugEl.textContent = msg;
-  debugEl.classList.add('show');
   console.log('[DEBUG]', msg);
 }
 
@@ -891,7 +880,7 @@ function setZoom(ns) {
   clampCov(); applyCov();
 }
 albumSquare.addEventListener('click', () => {
-  if (videoMode) return;   /* en modo video no abre el zoom */
+  if (videoMode) return;
   coverFullImg.src = albumImg.src;
   cov.s = 1; cov.tx = 0; cov.ty = 0; applyCov();
   coverOverlay.classList.add('open');
@@ -929,7 +918,7 @@ coverFullImg.addEventListener('pointermove', e => {
   coverFullImg.addEventListener(ev, e => { pts.delete(e.pointerId); pan0 = null; pinch0 = 0; })
 );
 
-/* ============ MODO VIDEO / COVER (toggle 📺/💿) ============ */
+/* ============ MODO VIDEO / COVER (📺/💿) ============ */
 function placeVideoRect() {
   if (!HAS_BRIDGE) return;
   const r = albumSquare.getBoundingClientRect();
@@ -1166,10 +1155,11 @@ function fbStop()  { if (mode === 'bridge') Android.stopYT(); else embedCmd('sto
 function fbSeek(s) { if (mode === 'bridge') Android.seekYT(s); else { embedPos = s; embedCmd('seekTo', [s, true]); } }
 function fbUnmute(){ if (mode === 'bridge') Android.unmuteYT(); else { embedCmd('unMute'); embedCmd('setVolume', [100]); } }
 
+/* 🔊 ya no muestra rectángulo flotante: activa el modo video sobre el cover */
 soundFab.onclick = () => {
   if (mode === 'bridge' || mode === 'embed') {
+    if (!videoMode) setVideoMode(true);
     fbUnmute(); fbPlay(); setReels(true);
-    try { if (mode === 'bridge') Android.showVideo(current.id, true); } catch (e) {}
   }
   else if (mode === 'stream') { audio.play().catch(() => {}); }
   soundFab.classList.remove('show');
@@ -1600,10 +1590,10 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 5) fallback WebView/iframe */
+  /* 5) fallback WebView/iframe (invisible si no estás en modo video) */
   debug('Sin stream → reproductor de fondo');
   fbLoad(id);
-  setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
+  setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed') && !videoMode) soundFab.classList.add('show'); }, 3500);
   enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
 }
 
@@ -1658,7 +1648,7 @@ function doStop() {
   if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
   else if (mode === 'bridge' || mode === 'embed') {
     fbStop();
-    try { Android.hideVideo(); } catch (e) {}
+    if (!videoMode) { try { Android.hideVideo(); } catch (e) {} }
   }
   else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
   setReels(false);
