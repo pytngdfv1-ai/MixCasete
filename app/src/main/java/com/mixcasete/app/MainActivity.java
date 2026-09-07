@@ -2,10 +2,16 @@ package com.mixcasete.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ContentValues;
+import android.content.Intent;
+import android.database.Cursor;
 import android.media.AudioManager;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.view.MotionEvent;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
@@ -30,12 +36,15 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.List;
 import java.util.Map;
 
 public class MainActivity extends Activity {
+
+    public static WeakReference<MainActivity> self;
 
     private WebView wv;
     private WebView playerWv;
@@ -45,6 +54,11 @@ public class MainActivity extends Activity {
     private boolean triedAlt = false;
     private String lastId = null;
     private boolean npInit = false;
+    private String pendingExport = null;
+
+    private static final int REQ_OPEN = 777;
+    private static final int REQ_WRITE = 42;
+    private static final int REQ_NOTIF = 43;
 
     private static final String UA =
             "Mozilla/5.0 (Linux; Android 11; Pixel 4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
@@ -53,6 +67,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        self = new WeakReference<>(this);
 
         FrameLayout root = new FrameLayout(this);
 
@@ -70,7 +85,7 @@ public class MainActivity extends Activity {
         playerWv.setWebViewClient(new PlayerClient());
         playerWv.setWebChromeClient(new WebChromeClient());
         root.addView(playerWv, new FrameLayout.LayoutParams(1, 1));
-        playerWv.setAlpha(0f);   /* invisible pero activo (el audio sigue funcionando) */
+        playerWv.setAlpha(0f);
 
         setContentView(root);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
@@ -93,6 +108,15 @@ public class MainActivity extends Activity {
 
     private void debugJs(final String m) {
         runOnUiThread(() -> wv.evaluateJavascript("debug('" + m + "')", null));
+    }
+
+    /* La notificación del servicio manda comandos → la web los ejecuta */
+    public void onMediaCommand(String cmd) {
+        runOnUiThread(() -> {
+            if ("pause".equals(cmd)) wv.evaluateJavascript("doPause()", null);
+            else if ("play".equals(cmd)) wv.evaluateJavascript("doPlay()", null);
+            else if ("stop".equals(cmd)) wv.evaluateJavascript("doStop()", null);
+        });
     }
 
     /* ================= PUENTE ================= */
@@ -142,6 +166,55 @@ public class MainActivity extends Activity {
             }).start();
         }
 
+        /* ---- PLAYLIST: exportar / importar / backup ---- */
+        @JavascriptInterface
+        public void exportPlaylist(final String json) {
+            if (Build.VERSION.SDK_INT < 29
+                    && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                       != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                pendingExport = json;
+                requestPermissions(new String[]{ android.Manifest.permission.WRITE_EXTERNAL_STORAGE }, REQ_WRITE);
+                return;
+            }
+            doExport(json);
+        }
+
+        @JavascriptInterface
+        public void openPlaylistFile() {
+            runOnUiThread(() -> {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                startActivityForResult(i, REQ_OPEN);
+            });
+        }
+
+        @JavascriptInterface
+        public void loadPlaylistBackup() {
+            new Thread(() -> {
+                final String s = readPlaylistFromDownloads();
+                if (s != null) runOnUiThread(() -> wv.evaluateJavascript(
+                    "window.onPlaylistImported && window.onPlaylistImported(" + JSONObject.quote(s) + ")", null));
+            }).start();
+        }
+
+        /* ---- SEGUNDO PLANO ---- */
+        @JavascriptInterface
+        public void startForegroundSvc() {
+            if (Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                       != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{ android.Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIF);
+            }
+            PlaybackService.start(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void stopForegroundSvc() {
+            PlaybackService.stop(MainActivity.this);
+        }
+
+        /* ---- PLAYER OCULTO ---- */
         private String watchUrl(String id) {
             return "https://www.youtube.com/watch?v=" + id + "&playsinline=1";
         }
@@ -162,7 +235,6 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> playerWv.loadUrl(watchUrl(id)));
         }
 
-        /* Visible SOLO sobre el cuadrado del cover */
         @JavascriptInterface
         public void placeVideo(float x, float y, float w, float h) {
             final float d = getResources().getDisplayMetrics().density;
@@ -178,35 +250,13 @@ public class MainActivity extends Activity {
             });
         }
 
-        /* Oculto: 1x1 px + alpha 0 (sigue reproduciendo audio en modo cover) */
         @JavascriptInterface
         public void hideVideo() {
             runOnUiThread(() -> {
                 FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
-                lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                 lp.setMargins(0, 0, 0, 0);
                 playerWv.setLayoutParams(lp);
                 playerWv.setAlpha(0f);
-            });
-        }
-
-        @JavascriptInterface
-        public void showVideo(final String id, final boolean show) {
-            runOnUiThread(() -> {
-                if (show) {
-                    int w = dp(170), h = dp(96);
-                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h);
-                    lp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.END;
-                    lp.setMargins(dp(8), dp(8), dp(8), dp(90));
-                    playerWv.setLayoutParams(lp);
-                    playerWv.setAlpha(1f);
-                    playerWv.loadUrl(watchUrl(id));
-                } else {
-                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
-                    lp.setMargins(0, 0, 0, 0);
-                    playerWv.setLayoutParams(lp);
-                    playerWv.setAlpha(0f);
-                }
             });
         }
 
@@ -217,8 +267,109 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
+    /* ---- permisos en runtime ---- */
+    @Override
+    public void onRequestPermissionsResult(int rc, String[] perms, int[] g) {
+        super.onRequestPermissionsResult(rc, perms, g);
+        if (rc == REQ_WRITE && g.length > 0 && g[0] == 0 && pendingExport != null) {
+            doExport(pendingExport);
+        }
+    }
+
+    /* ---- picker de archivo (importar playlist) ---- */
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req == REQ_OPEN && res == RESULT_OK && data != null && data.getData() != null) {
+            final Uri uri = data.getData();
+            new Thread(() -> {
+                try {
+                    InputStream is = getContentResolver().openInputStream(uri);
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+                    is.close();
+                    final String s = bo.toString("UTF-8");
+                    runOnUiThread(() -> wv.evaluateJavascript(
+                        "window.onPlaylistImported && window.onPlaylistImported(" + JSONObject.quote(s) + ")", null));
+                } catch (Exception e) {}
+            }).start();
+        }
+    }
+
+    /* ---- escritura/lectura de playlist en Descargas ---- */
+    private void doExport(final String json) {
+        new Thread(() -> {
+            final boolean ok = writePlaylistToDownloads(json);
+            runOnUiThread(() -> wv.evaluateJavascript(
+                "window.onExported && window.onExported(" + ok + ")", null));
+        }).start();
+    }
+
+    private boolean writePlaylistToDownloads(String json) {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                android.content.ContentResolver cr = getContentResolver();
+                Uri uri = findPlaylistUri();
+                if (uri == null) {
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.Downloads.DISPLAY_NAME, "MixCasete_playlist.json");
+                    cv.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+                    cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                    uri = cr.insert(MediaStore.Downloads.CONTENT_URI, cv);
+                }
+                if (uri == null) return false;
+                OutputStream os = cr.openOutputStream(uri, "wt");
+                os.write(json.getBytes("UTF-8"));
+                os.close();
+                return true;
+            } else {
+                File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File f = new File(dir, "MixCasete_playlist.json");
+                FileOutputStream os = new FileOutputStream(f);
+                os.write(json.getBytes("UTF-8"));
+                os.close();
+                return true;
+            }
+        } catch (Exception e) { return false; }
+    }
+
+    private String readPlaylistFromDownloads() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                Uri uri = findPlaylistUri();
+                if (uri == null) return null;
+                InputStream is = getContentResolver().openInputStream(uri);
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
+                is.close();
+                return bo.toString("UTF-8");
+            } else {
+                File f = new File(Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS), "MixCasete_playlist.json");
+                if (!f.exists()) return null;
+                return new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8");
+            }
+        } catch (Exception e) { return null; }
+    }
+
+    private Uri findPlaylistUri() {
+        Cursor c = getContentResolver().query(MediaStore.Downloads.CONTENT_URI,
+            new String[]{ MediaStore.Downloads._ID },
+            MediaStore.Downloads.DISPLAY_NAME + "=?",
+            new String[]{ "MixCasete_playlist.json" }, null);
+        Uri uri = null;
+        if (c != null) {
+            if (c.moveToFirst())
+                uri = android.content.ContentUris.withAppendedId(
+                    MediaStore.Downloads.CONTENT_URI,
+                    c.getLong(c.getColumnIndexOrThrow(MediaStore.Downloads._ID)));
+            c.close();
+        }
+        return uri;
     }
 
     /* ============ NEWPIPE ============ */
