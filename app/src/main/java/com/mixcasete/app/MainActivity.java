@@ -69,7 +69,8 @@ public class MainActivity extends Activity {
         config(playerWv.getSettings());
         playerWv.setWebViewClient(new PlayerClient());
         playerWv.setWebChromeClient(new WebChromeClient());
-        root.addView(playerWv, new FrameLayout.LayoutParams(2, 2));
+        root.addView(playerWv, new FrameLayout.LayoutParams(1, 1));
+        playerWv.setAlpha(0f);   /* invisible pero activo (el audio sigue funcionando) */
 
         setContentView(root);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
@@ -141,7 +142,6 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /* Página WATCH real (nunca da Error 153, a diferencia del embed) */
         private String watchUrl(String id) {
             return "https://www.youtube.com/watch?v=" + id + "&playsinline=1";
         }
@@ -162,6 +162,7 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> playerWv.loadUrl(watchUrl(id)));
         }
 
+        /* Visible SOLO sobre el cuadrado del cover */
         @JavascriptInterface
         public void placeVideo(float x, float y, float w, float h) {
             final float d = getResources().getDisplayMetrics().density;
@@ -172,13 +173,21 @@ public class MainActivity extends Activity {
                 lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                 lp.setMargins(X, Y, 0, 0);
                 playerWv.setLayoutParams(lp);
+                playerWv.setAlpha(1f);
                 playerWv.bringToFront();
             });
         }
 
+        /* Oculto: 1x1 px + alpha 0 (sigue reproduciendo audio en modo cover) */
         @JavascriptInterface
         public void hideVideo() {
-            runOnUiThread(() -> playerWv.setLayoutParams(new FrameLayout.LayoutParams(2, 2)));
+            runOnUiThread(() -> {
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
+                lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                lp.setMargins(0, 0, 0, 0);
+                playerWv.setLayoutParams(lp);
+                playerWv.setAlpha(0f);
+            });
         }
 
         @JavascriptInterface
@@ -190,9 +199,13 @@ public class MainActivity extends Activity {
                     lp.gravity = android.view.Gravity.BOTTOM | android.view.Gravity.END;
                     lp.setMargins(dp(8), dp(8), dp(8), dp(90));
                     playerWv.setLayoutParams(lp);
+                    playerWv.setAlpha(1f);
                     playerWv.loadUrl(watchUrl(id));
                 } else {
-                    playerWv.setLayoutParams(new FrameLayout.LayoutParams(2, 2));
+                    FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
+                    lp.setMargins(0, 0, 0, 0);
+                    playerWv.setLayoutParams(lp);
+                    playerWv.setAlpha(0f);
                 }
             });
         }
@@ -279,18 +292,18 @@ public class MainActivity extends Activity {
     private String nativePlayer(String id) {
         debugJs("Java: NewPipe extractor...");
         String r = newpipeExtract(id);
-        if (r != null) { debugJs("Java: NewPipe OK ✔"); return r; }
+        if (r != null) { debugJs("Java: NewPipe OK"); return r; }
 
         debugJs("Java: probando TV client...");
         r = innertube(id,
                 "{\"clientName\":\"TVHTML5\",\"clientVersion\":\"7.20250120.19.00\"}",
                 "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/537.36 (KHTML, like Gecko) 92.0.4515.43 TV Safari/537.36");
-        if (r != null) { debugJs("Java: TV client OK ✔"); return r; }
+        if (r != null) { debugJs("Java: TV client OK"); return r; }
 
         r = fromInstances(id);
         if (r != null) return r;
 
-        debugJs("Java: ninguna fuente dio audio ✖");
+        debugJs("Java: ninguna fuente dio audio");
         return null;
     }
 
@@ -353,13 +366,9 @@ public class MainActivity extends Activity {
                 if (host.isEmpty() || meta == null || !meta.optBoolean("api", false)) continue;
                 tried++;
                 try {
-                    debugJs("Java: Invidious " + host + "...");
                     JSONObject v = new JSONObject(httpGet("https://" + host + "/api/v1/videos/" + id));
                     String url = pickInvidious(v, host);
-                    if (url != null) {
-                        debugJs("Java: Invidious OK ✔ " + host);
-                        return buildOut(url, v.optString("title", ""), v.optString("author", ""));
-                    }
+                    if (url != null) return buildOut(url, v.optString("title", ""), v.optString("author", ""));
                 } catch (Exception e) {}
             }
         } catch (Exception e) {}
@@ -373,13 +382,9 @@ public class MainActivity extends Activity {
                 if (api.isEmpty()) continue;
                 tried++;
                 try {
-                    debugJs("Java: Piped " + api.replace("https://", "") + "...");
                     JSONObject v = new JSONObject(httpGet(api + "/streams/" + id));
                     String url = pickPiped(v);
-                    if (url != null) {
-                        debugJs("Java: Piped OK ✔");
-                        return buildOut(url, v.optString("title", ""), v.optString("uploader", ""));
-                    }
+                    if (url != null) return buildOut(url, v.optString("title", ""), v.optString("uploader", ""));
                 } catch (Exception e) {}
             }
         } catch (Exception e) {}
@@ -457,7 +462,7 @@ public class MainActivity extends Activity {
         return bo.toString("UTF-8");
     }
 
-    /* ============ WEBVIEW DE FONDO (página watch) ============ */
+    /* ============ WEBVIEW DE FONDO ============ */
     private class PlayerClient extends WebViewClient {
         @Override
         public void onPageFinished(WebView view, String url) {
@@ -480,7 +485,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* Oculta todo menos el reproductor de la página watch */
     private void injectWatchCss() {
         playerWv.evaluateJavascript(
             "(function(){if(document.getElementById('mcCss'))return;" +
