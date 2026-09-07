@@ -110,7 +110,6 @@ public class MainActivity extends Activity {
         runOnUiThread(() -> wv.evaluateJavascript("debug('" + m + "')", null));
     }
 
-    /* La notificación del servicio manda comandos → la web los ejecuta */
     public void onMediaCommand(String cmd) {
         runOnUiThread(() -> {
             if ("pause".equals(cmd)) wv.evaluateJavascript("doPause()", null);
@@ -119,7 +118,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    /* ================= PUENTE ================= */
     public class Bridge {
 
         @JavascriptInterface
@@ -166,10 +164,9 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /* ---- PLAYLIST: exportar / importar / backup ---- */
         @JavascriptInterface
         public void exportPlaylist(final String json) {
-            if (Build.VERSION.SDK_INT < 29
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
                     && checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 pendingExport = json;
@@ -198,7 +195,6 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /* ---- SEGUNDO PLANO ---- */
         @JavascriptInterface
         public void startForegroundSvc() {
             if (Build.VERSION.SDK_INT >= 33
@@ -214,7 +210,6 @@ public class MainActivity extends Activity {
             PlaybackService.stop(MainActivity.this);
         }
 
-        /* ---- PLAYER OCULTO ---- */
         private String watchUrl(String id) {
             return "https://www.youtube.com/watch?v=" + id + "&playsinline=1";
         }
@@ -267,7 +262,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
-    /* ---- permisos en runtime ---- */
     @Override
     public void onRequestPermissionsResult(int rc, String[] perms, int[] g) {
         super.onRequestPermissionsResult(rc, perms, g);
@@ -276,7 +270,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* ---- picker de archivo (importar playlist) ---- */
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
@@ -298,7 +291,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* ---- escritura/lectura de playlist en Descargas ---- */
     private void doExport(final String json) {
         new Thread(() -> {
             final boolean ok = writePlaylistToDownloads(json);
@@ -309,7 +301,7 @@ public class MainActivity extends Activity {
 
     private boolean writePlaylistToDownloads(String json) {
         try {
-            if (Build.VERSION.SDK_INT >= 29) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 android.content.ContentResolver cr = getContentResolver();
                 Uri uri = findPlaylistUri();
                 if (uri == null) {
@@ -317,7 +309,7 @@ public class MainActivity extends Activity {
                     cv.put(MediaStore.Downloads.DISPLAY_NAME, "MixCasete_playlist.json");
                     cv.put(MediaStore.Downloads.MIME_TYPE, "application/json");
                     cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-                    uri = cr.insert(MediaStore.Downloads.CONTENT_URI, cv);
+                    uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                 }
                 if (uri == null) return false;
                 OutputStream os = cr.openOutputStream(uri, "wt");
@@ -337,7 +329,7 @@ public class MainActivity extends Activity {
 
     private String readPlaylistFromDownloads() {
         try {
-            if (Build.VERSION.SDK_INT >= 29) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 Uri uri = findPlaylistUri();
                 if (uri == null) return null;
                 InputStream is = getContentResolver().openInputStream(uri);
@@ -357,7 +349,8 @@ public class MainActivity extends Activity {
     }
 
     private Uri findPlaylistUri() {
-        Cursor c = getContentResolver().query(MediaStore.Downloads.CONTENT_URI,
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null;
+        Cursor c = getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
             new String[]{ MediaStore.Downloads._ID },
             MediaStore.Downloads.DISPLAY_NAME + "=?",
             new String[]{ "MixCasete_playlist.json" }, null);
@@ -365,14 +358,13 @@ public class MainActivity extends Activity {
         if (c != null) {
             if (c.moveToFirst())
                 uri = android.content.ContentUris.withAppendedId(
-                    MediaStore.Downloads.CONTENT_URI,
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     c.getLong(c.getColumnIndexOrThrow(MediaStore.Downloads._ID)));
             c.close();
         }
         return uri;
     }
 
-    /* ============ NEWPIPE ============ */
     private synchronized void ensureNewPipe() {
         if (!npInit) {
             try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
@@ -439,7 +431,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /* ============ EXTRACCIÓN MULTI-FUENTE ============ */
     private String nativePlayer(String id) {
         debugJs("Java: NewPipe extractor...");
         String r = newpipeExtract(id);
@@ -613,7 +604,6 @@ public class MainActivity extends Activity {
         return bo.toString("UTF-8");
     }
 
-    /* ============ WEBVIEW DE FONDO ============ */
     private class PlayerClient extends WebViewClient {
         @Override
         public void onPageFinished(WebView view, String url) {
