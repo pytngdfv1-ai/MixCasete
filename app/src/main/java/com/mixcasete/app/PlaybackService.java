@@ -6,6 +6,9 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Intent;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
@@ -15,6 +18,8 @@ public class PlaybackService extends Service {
     public static final String CHANNEL = "mixcasete_play";
     public static final String EXTRA_CMD = "cmd";
     private PowerManager.WakeLock wl;
+    private AudioManager audioManager;
+    private AudioFocusRequest focusRequest;
 
     public static void start(android.app.Activity a) {
         Intent i = new Intent(a, PlaybackService.class);
@@ -37,12 +42,34 @@ public class PlaybackService extends Service {
             MainActivity.self.get().onMediaCommand(cmd);
         }
         startForeground(1, notificacion());
+        
         if (wl == null) {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "mixcasete:play");
         }
         if (!wl.isHeld()) wl.acquire(10 * 60 * 1000L);
+        
+        requestAudioFocus();
+        
         return START_STICKY;
+    }
+
+    private void requestAudioFocus() {
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build();
+            focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener(focusChange -> {})
+                .build();
+            audioManager.requestAudioFocus(focusRequest);
+        } else {
+            audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, 
+                AudioManager.AUDIOFOCUS_GAIN);
+        }
     }
 
     private Notification notificacion() {
@@ -83,6 +110,13 @@ public class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         if (wl != null && wl.isHeld()) wl.release();
+        if (audioManager != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && focusRequest != null) {
+                audioManager.abandonAudioFocusRequest(focusRequest);
+            } else {
+                audioManager.abandonAudioFocus(null);
+            }
+        }
         super.onDestroy();
     }
 }
