@@ -63,7 +63,6 @@
     box-shadow: inset 0 2px 3px rgba(0,0,0,0.9), 0 1px 0 rgba(255,255,255,0.5);
   }
 
-  /* Botón de tema */
   .theme-toggle {
     position: absolute; top: 26px; right: 14px; z-index: 6;
     width: 34px; height: 34px; border-radius: 50%;
@@ -629,7 +628,7 @@
   }
 
   /* ============================================================
-     🌙 MODO OSCURO — overrides
+     🌙 MODO OSCURO
      ============================================================ */
   body.dark { background: radial-gradient(circle at 50% 30%, #191613 0%, #0c0a09 70%, #060505 100%); }
 
@@ -664,7 +663,25 @@
   }
   body.dark .track-title { color: #f0e8d8; text-shadow: 0 1px 0 rgba(0,0,0,0.7); }
 
-  body.dark .cassette-body { filter: saturate(0.92) brightness(0.94); }
+  /* 🖤 ETIQUETA NEGRA en modo oscuro */
+  body.dark .cassette-body {
+    background:
+      radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+      linear-gradient(180deg, #1a1a1a 0%, #0d0d0d 45%, #000000 100%);
+    background-size: 3px 3px, auto;
+    box-shadow: inset 0 3px 4px rgba(255,255,255,0.08), inset 0 -3px 5px rgba(0,0,0,0.5);
+  }
+  body.dark .side-label-a {
+    background: linear-gradient(180deg, #3a3a3a 0%, #1f1f1f 100%);
+    color: #f5a623;
+  }
+  body.dark .reel-capsule {
+    background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 50%, #0f0f0f 100%);
+  }
+  body.dark .side-label-min { color: #d8c9a8; }
+  body.dark .cassette-lower {
+    background: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 40%, #000000 100%);
+  }
 
   body.dark .cassette-brand { color: #e8c07a; text-shadow: 0 1px 0 rgba(0,0,0,0.6); }
 
@@ -916,12 +933,8 @@
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
 const HAS_BRIDGE = typeof Android !== 'undefined';
 
-/* ============ DEBUG (solo consola) ============ */
-function debug(msg) {
-  console.log('[DEBUG]', msg);
-}
+function debug(msg) { console.log('[DEBUG]', msg); }
 
-/* ============ ELEMENTOS ============ */
 const audio = document.getElementById('audioEl');
 audio.volume = 1.0;
 audio.defaultMuted = false;
@@ -946,7 +959,6 @@ let embedFrame = null, embedPos = 0, embedTimer = null;
 let current = { id: null, title: '', author: '', thumb: '' };
 let playToken = 0;
 
-/* ============ 🌙 TEMA CLARO / OSCURO (persistente) ============ */
 function applyTheme(dark) {
   document.body.classList.toggle('dark', dark);
   themeToggle.textContent = dark ? '☀️' : '🌙';
@@ -959,7 +971,6 @@ themeToggle.onclick = () => applyTheme(!document.body.classList.contains('dark')
   applyTheme(saved === 'dark');
 })();
 
-/* ============ STREAM VÍA JAVA ============ */
 function bridgeGetStream(id) {
   return new Promise(res => {
     let done = false;
@@ -969,7 +980,6 @@ function bridgeGetStream(id) {
   });
 }
 
-/* ============ DESCARGA LOCAL ============ */
 window.onDownloaded = function (id, path) {
   const item = playlist.find(t => t.id === id);
   if (item) {
@@ -979,7 +989,6 @@ window.onDownloaded = function (id, path) {
   }
 };
 
-/* ============ COVER FULLSCREEN + ZOOM ============ */
 const cov = { s: 1, tx: 0, ty: 0 };
 function applyCov() {
   coverFullImg.style.transform = 'translate(' + cov.tx + 'px,' + cov.ty + 'px) scale(' + cov.s + ')';
@@ -1034,7 +1043,6 @@ coverFullImg.addEventListener('pointermove', e => {
   coverFullImg.addEventListener(ev, e => { pts.delete(e.pointerId); pan0 = null; pinch0 = 0; })
 );
 
-/* ============ CACHE ============ */
 const CACHE_KEY = 'mixcasete_cache_v1';
 let cache = {};
 try { cache = JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) {}
@@ -1047,7 +1055,6 @@ function cacheSet(id, patch) {
 }
 const STREAM_TTL = 3 * 3600 * 1000;
 
-/* ============ PLAYLIST ============ */
 const PL_KEY = 'mixcasete_playlist_v1';
 let playlist = [];
 try { playlist = JSON.parse(localStorage.getItem(PL_KEY)) || []; } catch (e) { playlist = []; }
@@ -1111,7 +1118,6 @@ document.getElementById('plOpen').onclick = () => { renderPL(); plOverlay.classL
 plOverlay.onclick = e => { if (e.target === plOverlay) plOverlay.classList.remove('open'); };
 function closePL() { plOverlay.classList.remove('open'); }
 
-/* ============ EXPORTAR / IMPORTAR PLAYLIST ============ */
 function playlistJson() {
   return JSON.stringify({ app: 'MixCasete', version: 1,
     exported: new Date().toISOString(), tracks: playlist });
@@ -1158,7 +1164,6 @@ document.getElementById('fileImport').onchange = e => {
 window.onPlaylistImported = text => applyImport(text);
 window.onExported = ok => flashTitle(ok ? '⬆ Guardada en Descargas ✔' : '⚠ No se pudo exportar');
 
-/* ============ TÍTULOS ============ */
 let flashTimer = null;
 function showTitle(t) { titleEl.textContent = t; }
 function setRealTitle(t) { if (t) { current.title = t; titleEl.textContent = t; } }
@@ -1168,7 +1173,6 @@ function flashTitle(msg) {
   flashTimer = setTimeout(() => { showTitle(current.title || '—'); }, 2200);
 }
 
-/* ============ REC ============ */
 function recToPlaylist() {
   const dot = document.getElementById('plRecDot');
   if (!current.id || !current.title) { flashTitle('⚠️ Nada sonando para grabar'); return; }
@@ -1186,7 +1190,6 @@ function recToPlaylist() {
   }
 }
 
-/* ============ RED ============ */
 const PROXIES = [
   u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
   u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u)
@@ -1222,7 +1225,6 @@ function fetchSmart(url, ms = 6000) {
   ));
 }
 
-/* ============ HELPERS ============ */
 function fmt(sec) {
   if (!sec && sec !== 0) return '';
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
@@ -1257,7 +1259,6 @@ function extractVideoId(str) {
   return m ? m[1] : null;
 }
 
-/* ============ BRIDGE: estado WebView fondo ============ */
 window.onBridgeState = function (s) {
   if (mode !== 'bridge') return;
   if (!s) return;
@@ -1268,7 +1269,6 @@ window.onBridgeState = function (s) {
   embedPos = Math.floor(d.t || 0);
 };
 
-/* ============ FALLBACK (player oculto) + SEGUNDO PLANO ============ */
 function fbLoad(id) {
   if (HAS_BRIDGE) {
     mode = 'bridge';
@@ -1297,7 +1297,6 @@ soundFab.onclick = () => {
   soundFab.classList.remove('show');
 };
 
-/* ============ IFRAME EMBED (escritorio, invisible) ============ */
 function ensureEmbed() {
   if (embedFrame) return embedFrame;
   const f = document.createElement('iframe');
@@ -1349,7 +1348,6 @@ window.addEventListener('message', e => {
   } catch (err) {}
 });
 
-/* ============ LISTAS VIVAS ============ */
 let listsPromise = null;
 function loadLists() {
   if (listsPromise) return listsPromise;
@@ -1376,7 +1374,6 @@ function loadLists() {
   return listsPromise;
 }
 
-/* ============ NATIVA WEB ============ */
 const YT_CLIENTS = [
   { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
     userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
@@ -1420,7 +1417,6 @@ async function youtubeNativeStream(id) {
   return null;
 }
 
-/* ============ COVER HQ ============ */
 async function bestCoverCandidates(id, title) {
   const urls = [];
   try {
@@ -1477,7 +1473,6 @@ async function enrichMeta(id, fallbackTitle) {
   return { title: finalTitle, author: finalAuthor };
 }
 
-/* ============ BÚSQUEDA ============ */
 async function pipedSearch(q) {
   const { piped } = await loadLists();
   for (const base of piped.slice(0, 3)) {
@@ -1580,7 +1575,6 @@ async function searchMusic(q) {
   }
 }
 
-/* ============ STREAMS WEB ============ */
 function pickFormats(j, id) {
   if (!j) return null;
   const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
@@ -1643,7 +1637,6 @@ function raceStreams(id, ms) {
   ).catch(() => null);
 }
 
-/* ============ REPRODUCCIÓN ============ */
 function startStream(url, title, src) {
   soundFab.classList.remove('show');
   audio.src = url;
@@ -1675,7 +1668,6 @@ async function playById(id, title, thumb, author) {
   } else if (thumb) { albumImg.src = thumb; }
   setCoverHQ(id, title || (c && c.title) || '');
 
-  /* 1) archivo LOCAL descargado (offline) */
   const localItem = playlist.find(t => t.id === id);
   if (localItem && localItem.local) {
     debug('Reproduciendo desde almacenamiento local 💾');
@@ -1683,14 +1675,12 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 2) cache fresco */
   if (c && c.s && Date.now() - (c.t || 0) < STREAM_TTL) {
     debug('Stream desde cache');
     startStream(c.s, c.title || title, c);
     return;
   }
 
-  /* 3) extracción NATIVA Java */
   if (HAS_BRIDGE) {
     debug('Java: extrayendo audio de YouTube...');
     const s = await bridgeGetStream(id);
@@ -1702,7 +1692,6 @@ async function playById(id, title, thumb, author) {
     }
   }
 
-  /* 4) carrera web */
   debug('Buscando stream web...');
   const src = await raceStreams(id, 12000);
   if (my !== playToken) return;
@@ -1712,7 +1701,6 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 5) fallback: player oculto + servicio de segundo plano */
   debug('Sin stream → reproductor de fondo');
   fbLoad(id);
   setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
@@ -1750,7 +1738,6 @@ function autoNext() {
   } else { setLed('none'); showTitle('⏹ Fin de la cinta'); }
 }
 
-/* ============ CONTROLES ============ */
 function doPlay() {
   if (mode === 'stream') {
     audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo'));
@@ -1798,7 +1785,6 @@ document.querySelectorAll('.piano-btn').forEach(btn => {
   });
 });
 
-/* ============ CINTA VIVA ============ */
 audio.addEventListener('play',    () => setReels(true));
 audio.addEventListener('playing', () => { setReels(true); debug('🔊 SONANDO'); });
 audio.addEventListener('pause',   () => setReels(false));
@@ -1822,7 +1808,6 @@ audio.addEventListener('error', () => {
   }
 });
 
-/* ============ OVERLAY BÚSQUEDA ============ */
 const overlay = document.getElementById('searchOverlay');
 document.getElementById('searchOpen').onclick = () => overlay.classList.add('open');
 overlay.onclick = e => { if (e.target === overlay) overlay.classList.remove('open'); };
@@ -1844,7 +1829,6 @@ document.getElementById('urlInput').addEventListener('keypress', e => {
   if (e.key === 'Enter') document.getElementById('urlGo').click();
 });
 
-/* ============ INIT ============ */
 updatePlBar();
 renderPL();
 if (HAS_BRIDGE && !playlist.length) {
