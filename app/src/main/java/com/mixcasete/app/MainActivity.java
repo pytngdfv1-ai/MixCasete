@@ -10,9 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.SystemClock;
 import android.provider.MediaStore;
-import android.view.MotionEvent;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -47,13 +45,6 @@ public class MainActivity extends Activity {
     public static WeakReference<MainActivity> self;
 
     private WebView wv;
-    private WebView playerWv;
-
-    private boolean polling = false;
-    private int noVideoCount = 0;
-    private boolean triedAlt = false;
-    private String lastId = null;
-    private boolean npInit = false;
     private String pendingExport = null;
 
     private static final int REQ_OPEN = 777;
@@ -69,29 +60,19 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         self = new WeakReference<>(this);
 
-        FrameLayout root = new FrameLayout(this);
-
         wv = new WebView(this);
         config(wv.getSettings());
         wv.setWebViewClient(new WebViewClient());
         wv.setWebChromeClient(new WebChromeClient());
         wv.addJavascriptInterface(new Bridge(), "Android");
+
+        FrameLayout root = new FrameLayout(this);
         root.addView(wv, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
-        playerWv = new WebView(this);
-        config(playerWv.getSettings());
-        playerWv.setWebViewClient(new PlayerClient());
-        playerWv.setWebChromeClient(new WebChromeClient());
-        root.addView(playerWv, new FrameLayout.LayoutParams(1, 1));
-        playerWv.setAlpha(0f);
-
         setContentView(root);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
-
-        wv.setKeepScreenOn(true);
-        playerWv.setKeepScreenOn(true);
 
         wv.loadUrl("file:///android_asset/index.html");
     }
@@ -110,31 +91,51 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
     }
 
-    private void debugJs(final String m) {
-        runOnUiThread(() -> wv.evaluateJavascript("debug('" + m + "')", null));
-    }
-
-    public void onMediaCommand(String cmd) {
-        runOnUiThread(() -> {
-            if ("pause".equals(cmd)) wv.evaluateJavascript("doPause()", null);
-            else if ("play".equals(cmd)) wv.evaluateJavascript("doPlay()", null);
-            else if ("stop".equals(cmd)) wv.evaluateJavascript("doStop()", null);
-        });
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        wv.onResume();
-        playerWv.onResume();
+    // Eventos del MediaPlayer nativo → la web reacciona
+    public void onPlayerEvent(String event) {
+        runOnUiThread(() -> wv.evaluateJavascript(
+                "window.onNativePlayerEvent && window.onNativePlayerEvent('" + event + "')", null));
     }
 
     public class Bridge {
+
+        @JavascriptInterface
+        public void nativePlay(final String url, final String title) {
+            Intent i = new Intent(MainActivity.this, PlaybackService.class);
+            i.putExtra(PlaybackService.EXTRA_CMD, "play_url");
+            i.putExtra(PlaybackService.EXTRA_URL, url);
+            i.putExtra(PlaybackService.EXTRA_TITLE, title != null ? title : "Mix.Casete");
+            PlaybackService.start(MainActivity.this, i);
+        }
+
+        @JavascriptInterface
+        public void nativePause() {
+            Intent i = new Intent(MainActivity.this, PlaybackService.class);
+            i.putExtra(PlaybackService.EXTRA_CMD, "pause");
+            PlaybackService.start(MainActivity.this, i);
+        }
+
+        @JavascriptInterface
+        public void nativeResume() {
+            Intent i = new Intent(MainActivity.this, PlaybackService.class);
+            i.putExtra(PlaybackService.EXTRA_CMD, "play");
+            PlaybackService.start(MainActivity.this, i);
+        }
+
+        @JavascriptInterface
+        public void nativeStop() {
+            Intent i = new Intent(MainActivity.this, PlaybackService.class);
+            i.putExtra(PlaybackService.EXTRA_CMD, "stop");
+            PlaybackService.start(MainActivity.this, i);
+        }
+
+        @JavascriptInterface
+        public void nativeSeek(int sec) {
+            Intent i = new Intent(MainActivity.this, PlaybackService.class);
+            i.putExtra(PlaybackService.EXTRA_CMD, "seek");
+            i.putExtra(PlaybackService.EXTRA_SEEK, sec);
+            PlaybackService.start(MainActivity.this, i);
+        }
 
         @JavascriptInterface
         public void getStream(final String id) {
@@ -210,72 +211,6 @@ public class MainActivity extends Activity {
                     "window.onPlaylistImported && window.onPlaylistImported(" + JSONObject.quote(s) + ")", null));
             }).start();
         }
-
-        @JavascriptInterface
-        public void startForegroundSvc() {
-            if (Build.VERSION.SDK_INT >= 33
-                    && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                       != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(new String[]{ android.Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIF);
-            }
-            PlaybackService.start(MainActivity.this);
-        }
-
-        @JavascriptInterface
-        public void stopForegroundSvc() {
-            PlaybackService.stop(MainActivity.this);
-        }
-
-        private String watchUrl(String id) {
-            return "https://www.youtube.com/watch?v=" + id + "&playsinline=1";
-        }
-
-        @JavascriptInterface
-        public void playYT(final String id) {
-            lastId = id;
-            noVideoCount = 0;
-            triedAlt = false;
-            runOnUiThread(() -> playerWv.loadUrl(watchUrl(id)));
-        }
-
-        @JavascriptInterface
-        public void loadVideo(final String id) {
-            lastId = id;
-            noVideoCount = 0;
-            triedAlt = false;
-            runOnUiThread(() -> playerWv.loadUrl(watchUrl(id)));
-        }
-
-        @JavascriptInterface
-        public void placeVideo(float x, float y, float w, float h) {
-            final float d = getResources().getDisplayMetrics().density;
-            final int X = Math.round(x * d), Y = Math.round(y * d);
-            final int W = Math.round(w * d), H = Math.round(h * d);
-            runOnUiThread(() -> {
-                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(W, H);
-                lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
-                lp.setMargins(X, Y, 0, 0);
-                playerWv.setLayoutParams(lp);
-                playerWv.setAlpha(1f);
-                playerWv.bringToFront();
-            });
-        }
-
-        @JavascriptInterface
-        public void hideVideo() {
-            runOnUiThread(() -> {
-                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(1, 1);
-                lp.setMargins(0, 0, 0, 0);
-                playerWv.setLayoutParams(lp);
-                playerWv.setAlpha(0f);
-            });
-        }
-
-        @JavascriptInterface public void resumeYT() { runOnUiThread(() -> { tap(); enforce(); }); }
-        @JavascriptInterface public void pauseYT() { js("(function(){var v=document.querySelector('video');if(v)v.pause();})();"); }
-        @JavascriptInterface public void stopYT()  { runOnUiThread(() -> { polling = false; playerWv.loadUrl("about:blank"); }); }
-        @JavascriptInterface public void seekYT(final int sec) { js("(function(){var v=document.querySelector('video');if(v)v.currentTime=" + sec + ";})();"); }
-        @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
     }
 
     @Override
@@ -382,10 +317,7 @@ public class MainActivity extends Activity {
     }
 
     private synchronized void ensureNewPipe() {
-        if (!npInit) {
-            try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
-            npInit = true;
-        }
+        try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
     }
 
     private String newpipeExtract(String id) {
@@ -448,68 +380,9 @@ public class MainActivity extends Activity {
     }
 
     private String nativePlayer(String id) {
-        debugJs("Java: NewPipe extractor...");
         String r = newpipeExtract(id);
-        if (r != null) { debugJs("Java: NewPipe OK"); return r; }
-
-        debugJs("Java: probando TV client...");
-        r = innertube(id,
-                "{\"clientName\":\"TVHTML5\",\"clientVersion\":\"7.20250120.19.00\"}",
-                "Mozilla/5.0 (SMART-TV; LINUX; Tizen 7.0) AppleWebKit/537.36 (KHTML, like Gecko) 92.0.4515.43 TV Safari/537.36");
-        if (r != null) { debugJs("Java: TV client OK"); return r; }
-
-        r = fromInstances(id);
         if (r != null) return r;
-
-        debugJs("Java: ninguna fuente dio audio");
-        return null;
-    }
-
-    private String innertube(String id, String clientJson, String ua) {
-        try {
-            HttpURLConnection c = (HttpURLConnection) new URL(
-                    "https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection();
-            c.setRequestMethod("POST");
-            c.setConnectTimeout(7000);
-            c.setReadTimeout(7000);
-            c.setRequestProperty("Content-Type", "application/json");
-            c.setRequestProperty("User-Agent", ua);
-            c.setDoOutput(true);
-            String body = "{\"context\":{\"client\":" + clientJson + ",\"hl\":\"es\",\"gl\":\"US\"}," +
-                    "\"videoId\":\"" + id + "\",\"params\":\"8AEB\"}";
-            OutputStream os = c.getOutputStream();
-            os.write(body.getBytes("UTF-8"));
-            os.close();
-            if (c.getResponseCode() != 200) return null;
-            JSONObject j = new JSONObject(readAll(c.getInputStream()));
-            JSONObject sd = j.optJSONObject("streamingData");
-            if (sd == null) return null;
-            String url = null;
-            int best = -1;
-            JSONArray ad = sd.optJSONArray("adaptiveFormats");
-            if (ad != null) for (int i = 0; i < ad.length(); i++) {
-                JSONObject f = ad.optJSONObject(i);
-                if (f == null) continue;
-                if (f.has("url") && f.optString("mimeType", "").startsWith("audio/mp4")) {
-                    int br = f.optInt("bitrate", 0);
-                    if (br > best) { best = br; url = f.optString("url"); }
-                }
-            }
-            if (url == null) {
-                JSONArray fm = sd.optJSONArray("formats");
-                if (fm != null) for (int i = 0; i < fm.length(); i++) {
-                    JSONObject f = fm.optJSONObject(i);
-                    if (f != null && f.has("url")) { url = f.optString("url"); break; }
-                }
-            }
-            if (url == null) return null;
-            JSONObject out = new JSONObject();
-            out.put("url", url);
-            JSONObject vd = j.optJSONObject("videoDetails");
-            out.put("title", vd != null ? vd.optString("title", "") : "");
-            out.put("author", vd != null ? vd.optString("author", "") : "");
-            return out.toString();
-        } catch (Exception e) { return null; }
+        return fromInstances(id);
     }
 
     private String fromInstances(String id) {
@@ -618,97 +491,6 @@ public class MainActivity extends Activity {
         int n;
         while ((n = is.read(buf)) > 0) bo.write(buf, 0, n);
         return bo.toString("UTF-8");
-    }
-
-    private class PlayerClient extends WebViewClient {
-        @Override
-        public void onPageFinished(WebView view, String url) {
-            if (url.contains("youtube.com/watch") || url.contains("youtu.be/")) {
-                injectWatchCss();
-                tap();
-                enforce();
-                view.postDelayed(() -> { injectWatchCss(); tap(); enforce(); }, 700);
-                view.postDelayed(() -> enforce(), 1800);
-                view.postDelayed(() -> enforce(), 3500);
-                startPoll();
-            } else if (url.contains("/embed/") || url.contains("youtube-nocookie")) {
-                tap();
-                enforce();
-                view.postDelayed(() -> { tap(); enforce(); }, 700);
-                view.postDelayed(() -> enforce(), 1800);
-                view.postDelayed(() -> enforce(), 3500);
-                startPoll();
-            }
-        }
-    }
-
-    private void injectWatchCss() {
-        playerWv.evaluateJavascript(
-            "(function(){if(document.getElementById('mcCss'))return;" +
-            "var s=document.createElement('style');s.id='mcCss';" +
-            "s.textContent='ytd-masthead,#masthead,#comments,ytd-comments,#related,ytd-related,#secondary,#below,#chat,ytd-live-chat-frame,#subscribe-button,ytd-reel-shelf-renderer{display:none!important}';" +
-            "document.head.appendChild(s);window.scrollTo(0,0);})()", null);
-    }
-
-    private void tap() {
-        long t = SystemClock.uptimeMillis();
-        MotionEvent down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, 1f, 1f, 0);
-        MotionEvent up   = MotionEvent.obtain(t, t + 60, MotionEvent.ACTION_UP, 1f, 1f, 0);
-        playerWv.dispatchTouchEvent(down);
-        playerWv.dispatchTouchEvent(up);
-        down.recycle();
-        up.recycle();
-    }
-
-    private void enforce() {
-        try {
-            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-            if (am != null) am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
-        } catch (Throwable t) {}
-        playerWv.evaluateJavascript(
-            "(function(){var v=document.querySelector('video');" +
-            "if(!v)return 'novideo';" +
-            "v.removeAttribute('muted');v.defaultMuted=false;v.muted=false;v.volume=1;" +
-            "if(v.paused){v.play();}" +
-            "return 'ok m='+v.muted+' p='+v.paused;})()",
-            value -> wv.evaluateJavascript("debug('bridge " + value + "')", null)
-        );
-    }
-
-    private void startPoll() {
-        if (polling) return;
-        polling = true;
-        final Runnable[] r = new Runnable[1];
-        r[0] = () -> {
-            playerWv.evaluateJavascript(
-                "(function(){var v=document.querySelector('video');if(!v)return null;" +
-                "return JSON.stringify({t:v.currentTime||0,p:v.paused,e:v.ended,m:v.muted});})()",
-                value -> {
-                    if (value == null || value.equals("null")) {
-                        noVideoCount++;
-                        if (noVideoCount > 4 && !triedAlt && lastId != null) {
-                            triedAlt = true;
-                            noVideoCount = 0;
-                            runOnUiThread(() -> playerWv.loadUrl(
-                                "https://www.youtube-nocookie.com/embed/" + lastId +
-                                "?autoplay=1&playsinline=1&rel=0"));
-                        }
-                    } else {
-                        noVideoCount = 0;
-                        if ((value.contains("\"m\":true") || value.contains("\"p\":true"))
-                                && !value.contains("\"e\":true")) enforce();
-                    }
-                    wv.evaluateJavascript(
-                        "window.onBridgeState && window.onBridgeState(" + value + ");", null);
-                }
-            );
-            wv.postDelayed(r[0], 1000);
-        };
-        wv.postDelayed(r[0], 1200);
-    }
-
-    private void js(final String code) {
-        runOnUiThread(() -> playerWv.evaluateJavascript(code, null));
     }
 
     @Override
