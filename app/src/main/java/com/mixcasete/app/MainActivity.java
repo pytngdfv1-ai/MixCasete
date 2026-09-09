@@ -39,6 +39,7 @@ import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -89,6 +90,9 @@ public class MainActivity extends Activity {
         setContentView(root);
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
 
+        /* Limpia respaldos duplicados de la playlist al abrir (una sola vez en fondo) */
+        new Thread(() -> cleanupDuplicateBackups()).start();
+
         wv.loadUrl("file:///android_asset/index.html");
     }
 
@@ -114,7 +118,6 @@ public class MainActivity extends Activity {
     /* ================= PUENTE JS ↔ JAVA ================= */
     public class Bridge {
 
-        /* ---- 🌐 NUEVO: abrir navegador del teléfono ---- */
         @JavascriptInterface
         public void openBrowser(final String url) {
             runOnUiThread(() -> {
@@ -124,7 +127,6 @@ public class MainActivity extends Activity {
             });
         }
 
-        /* ---- Reproductor nativo (segundo plano) ---- */
         @JavascriptInterface
         public void nativePlay(final String url, final String title) {
             Intent i = new Intent(MainActivity.this, PlaybackService.class);
@@ -159,7 +161,6 @@ public class MainActivity extends Activity {
             PlaybackService.start(MainActivity.this, i);
         }
 
-        /* ---- WebView de respaldo (audio en primer plano) ---- */
         @JavascriptInterface
         public void playYT(final String id) {
             lastId = id;
@@ -174,7 +175,6 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void seekYT(final int sec) { js("(function(){var v=document.querySelector('video');if(v)v.currentTime=" + sec + ";})();"); }
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
 
-        /* ---- Extracción de audio ---- */
         @JavascriptInterface
         public void getStream(final String id) {
             new Thread(() -> {
@@ -219,7 +219,6 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /* ---- Playlist: exportar / importar / backup ---- */
         @JavascriptInterface
         public void exportPlaylist(final String json) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
@@ -289,20 +288,64 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /* ============ RESPALDO ÚNICO DE PLAYLIST ============ */
+
+    /* Busca TODOS los respaldos existentes (MixCasete_playlist*.json) */
+    private List<Uri> findAllPlaylistUris() {
+        List<Uri> out = new ArrayList<>();
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return out;
+        Cursor c = getContentResolver().query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                new String[]{ MediaStore.Downloads._ID },
+                MediaStore.Downloads.DISPLAY_NAME + " LIKE ?",
+                new String[]{ "MixCasete_playlist%" },
+                MediaStore.Downloads._ID + " ASC");
+        if (c != null) {
+            while (c.moveToNext()) {
+                long id = c.getLong(0);
+                out.add(android.content.ContentUris.withAppendedId(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, id));
+            }
+            c.close();
+        }
+        return out;
+    }
+
+    /* Borra duplicados: conserva un solo archivo */
+    private void cleanupDuplicateBackups() {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+            List<Uri> all = findAllPlaylistUris();
+            for (int i = 1; i < all.size(); i++) {
+                try { getContentResolver().delete(all.get(i), null, null); } catch (Exception e) {}
+            }
+        } catch (Exception e) {}
+    }
+
+    /* Escribe SIEMPRE sobre el mismo archivo (crea solo si no existe) */
     private boolean writePlaylistToDownloads(String json) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 android.content.ContentResolver cr = getContentResolver();
-                Uri uri = findPlaylistUri();
-                if (uri == null) {
+                List<Uri> existing = findAllPlaylistUris();
+                Uri target = null;
+                if (!existing.isEmpty()) {
+                    target = existing.get(0);
+                    /* elimina duplicados si los hubiera */
+                    for (int i = 1; i < existing.size(); i++) {
+                        try { cr.delete(existing.get(i), null, null); } catch (Exception e) {}
+                    }
+                } else {
                     ContentValues cv = new ContentValues();
                     cv.put(MediaStore.Downloads.DISPLAY_NAME, "MixCasete_playlist.json");
                     cv.put(MediaStore.Downloads.MIME_TYPE, "application/json");
                     cv.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-                    uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                    cv.put(MediaStore.Downloads.IS_PENDING, 0);
+                    target = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
                 }
-                if (uri == null) return false;
-                OutputStream os = cr.openOutputStream(uri, "wt");
+                if (target == null) return false;
+                /* "wt" = trunca y sobrescribe el mismo archivo */
+                OutputStream os = cr.openOutputStream(target, "wt");
                 os.write(json.getBytes("UTF-8"));
                 os.close();
                 return true;
@@ -320,9 +363,9 @@ public class MainActivity extends Activity {
     private String readPlaylistFromDownloads() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Uri uri = findPlaylistUri();
-                if (uri == null) return null;
-                InputStream is = getContentResolver().openInputStream(uri);
+                List<Uri> all = findAllPlaylistUris();
+                if (all.isEmpty()) return null;
+                InputStream is = getContentResolver().openInputStream(all.get(0));
                 java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
                 byte[] buf = new byte[8192];
                 int n;
@@ -336,23 +379,6 @@ public class MainActivity extends Activity {
                 return new String(java.nio.file.Files.readAllBytes(f.toPath()), "UTF-8");
             }
         } catch (Exception e) { return null; }
-    }
-
-    private Uri findPlaylistUri() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null;
-        Cursor c = getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-            new String[]{ MediaStore.Downloads._ID },
-            MediaStore.Downloads.DISPLAY_NAME + "=?",
-            new String[]{ "MixCasete_playlist.json" }, null);
-        Uri uri = null;
-        if (c != null) {
-            if (c.moveToFirst())
-                uri = android.content.ContentUris.withAppendedId(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    c.getLong(c.getColumnIndexOrThrow(MediaStore.Downloads._ID)));
-            c.close();
-        }
-        return uri;
     }
 
     /* ============ EXTRACCIÓN DE AUDIO ============ */
