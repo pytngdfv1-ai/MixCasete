@@ -111,7 +111,18 @@ public class MainActivity extends Activity {
                 "window.onNativePlayerEvent && window.onNativePlayerEvent('" + event + "')", null));
     }
 
+    /* ================= PUENTE JS ↔ JAVA ================= */
     public class Bridge {
+
+        /* ---- 🌐 NUEVO: abrir navegador del teléfono ---- */
+        @JavascriptInterface
+        public void openBrowser(final String url) {
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                } catch (Exception e) {}
+            });
+        }
 
         /* ---- Reproductor nativo (segundo plano) ---- */
         @JavascriptInterface
@@ -163,7 +174,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface public void seekYT(final int sec) { js("(function(){var v=document.querySelector('video');if(v)v.currentTime=" + sec + ";})();"); }
         @JavascriptInterface public void unmuteYT() { runOnUiThread(() -> { tap(); enforce(); tap(); enforce(); }); }
 
-        /* ---- Extracción ---- */
+        /* ---- Extracción de audio ---- */
         @JavascriptInterface
         public void getStream(final String id) {
             new Thread(() -> {
@@ -208,7 +219,7 @@ public class MainActivity extends Activity {
             }).start();
         }
 
-        /* ---- Playlist ---- */
+        /* ---- Playlist: exportar / importar / backup ---- */
         @JavascriptInterface
         public void exportPlaylist(final String json) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
@@ -344,7 +355,7 @@ public class MainActivity extends Activity {
         return uri;
     }
 
-    /* ============ EXTRACCIÓN ============ */
+    /* ============ EXTRACCIÓN DE AUDIO ============ */
     private synchronized void ensureNewPipe() {
         if (!npInit) {
             try { NewPipe.init(new HttpDownloader()); } catch (Throwable t) {}
