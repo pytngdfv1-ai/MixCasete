@@ -305,7 +305,7 @@
     box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
     transition: all 0.3s;
   }
-  .led.stream { background: #39d353; box-shadow: 0 0 8px #39d353, inset 0 0 2px rgba(255,255,255,0.6); }
+  .led.stream, .led.native { background: #39d353; box-shadow: 0 0 8px #39d353, inset 0 0 2px rgba(255,255,255,0.6); }
   .led.iframe, .led.embed, .led.bridge { background: #ffb020; box-shadow: 0 0 8px #ffb020, inset 0 0 2px rgba(255,255,255,0.6); }
 
   .buttons-area { margin-top: 10px; padding: 0 4px; }
@@ -927,7 +927,6 @@
 </div>
 
 <audio id="audioEl"></audio>
-<div id="ytMount" style="position:absolute;width:1px;height:1px;opacity:0.01;pointer-events:none;overflow:hidden;"></div>
 
 <script>
 const IS_ANDROID = /Android/i.test(navigator.userAgent);
@@ -954,11 +953,10 @@ const albumSquare = document.getElementById('albumSquare');
 const themeToggle = document.getElementById('themeToggle');
 
 let mode = 'none';
-let ytPlayer = null, ytReady = false, ytQueue = null;
-let embedFrame = null, embedPos = 0, embedTimer = null;
 let current = { id: null, title: '', author: '', thumb: '' };
 let playToken = 0;
 
+/* ============ 🌙 TEMA CLARO / OSCURO (persistente) ============ */
 function applyTheme(dark) {
   document.body.classList.toggle('dark', dark);
   themeToggle.textContent = dark ? '☀️' : '🌙';
@@ -971,6 +969,23 @@ themeToggle.onclick = () => applyTheme(!document.body.classList.contains('dark')
   applyTheme(saved === 'dark');
 })();
 
+/* ============ 🎵 REPRODUCTOR NATIVO (Android) ============ */
+window.onNativePlayerEvent = function(event) {
+  if (event === 'playing') {
+    setReels(true);
+    debug('🔊 SONANDO (nativo)');
+  } else if (event === 'paused') {
+    setReels(false);
+  } else if (event === 'ended') {
+    setReels(false);
+    autoNext();
+  } else if (event === 'error') {
+    debug('⚠ Error de audio nativo');
+    setReels(false);
+  }
+};
+
+/* ============ STREAM VÍA JAVA ============ */
 function bridgeGetStream(id) {
   return new Promise(res => {
     let done = false;
@@ -980,6 +995,7 @@ function bridgeGetStream(id) {
   });
 }
 
+/* ============ DESCARGA LOCAL ============ */
 window.onDownloaded = function (id, path) {
   const item = playlist.find(t => t.id === id);
   if (item) {
@@ -989,6 +1005,7 @@ window.onDownloaded = function (id, path) {
   }
 };
 
+/* ============ COVER FULLSCREEN + ZOOM ============ */
 const cov = { s: 1, tx: 0, ty: 0 };
 function applyCov() {
   coverFullImg.style.transform = 'translate(' + cov.tx + 'px,' + cov.ty + 'px) scale(' + cov.s + ')';
@@ -1043,6 +1060,7 @@ coverFullImg.addEventListener('pointermove', e => {
   coverFullImg.addEventListener(ev, e => { pts.delete(e.pointerId); pan0 = null; pinch0 = 0; })
 );
 
+/* ============ CACHE ============ */
 const CACHE_KEY = 'mixcasete_cache_v1';
 let cache = {};
 try { cache = JSON.parse(localStorage.getItem(CACHE_KEY)) || {}; } catch (e) {}
@@ -1055,6 +1073,7 @@ function cacheSet(id, patch) {
 }
 const STREAM_TTL = 3 * 3600 * 1000;
 
+/* ============ PLAYLIST ============ */
 const PL_KEY = 'mixcasete_playlist_v1';
 let playlist = [];
 try { playlist = JSON.parse(localStorage.getItem(PL_KEY)) || []; } catch (e) { playlist = []; }
@@ -1118,6 +1137,7 @@ document.getElementById('plOpen').onclick = () => { renderPL(); plOverlay.classL
 plOverlay.onclick = e => { if (e.target === plOverlay) plOverlay.classList.remove('open'); };
 function closePL() { plOverlay.classList.remove('open'); }
 
+/* ============ EXPORTAR / IMPORTAR PLAYLIST ============ */
 function playlistJson() {
   return JSON.stringify({ app: 'MixCasete', version: 1,
     exported: new Date().toISOString(), tracks: playlist });
@@ -1164,6 +1184,7 @@ document.getElementById('fileImport').onchange = e => {
 window.onPlaylistImported = text => applyImport(text);
 window.onExported = ok => flashTitle(ok ? '⬆ Guardada en Descargas ✔' : '⚠ No se pudo exportar');
 
+/* ============ TÍTULOS ============ */
 let flashTimer = null;
 function showTitle(t) { titleEl.textContent = t; }
 function setRealTitle(t) { if (t) { current.title = t; titleEl.textContent = t; } }
@@ -1173,6 +1194,7 @@ function flashTitle(msg) {
   flashTimer = setTimeout(() => { showTitle(current.title || '—'); }, 2200);
 }
 
+/* ============ REC ============ */
 function recToPlaylist() {
   const dot = document.getElementById('plRecDot');
   if (!current.id || !current.title) { flashTitle('⚠️ Nada sonando para grabar'); return; }
@@ -1190,6 +1212,7 @@ function recToPlaylist() {
   }
 }
 
+/* ============ RED ============ */
 const PROXIES = [
   u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
   u => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u)
@@ -1225,6 +1248,7 @@ function fetchSmart(url, ms = 6000) {
   ));
 }
 
+/* ============ HELPERS ============ */
 function fmt(sec) {
   if (!sec && sec !== 0) return '';
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
@@ -1250,7 +1274,7 @@ function setReels(on) {
   reelR.classList.toggle('playing', on);
 }
 function setLed(m) {
-  modeLed.className = 'led' + (m === 'stream' ? ' stream' : (m === 'iframe' || m === 'embed' || m === 'bridge') ? ' iframe' : '');
+  modeLed.className = 'led' + (m === 'stream' || m === 'native' ? ' ' + m : (m === 'iframe' || m === 'embed' || m === 'bridge') ? ' iframe' : '');
 }
 function extractVideoId(str) {
   str = (str || '').trim();
@@ -1259,95 +1283,7 @@ function extractVideoId(str) {
   return m ? m[1] : null;
 }
 
-window.onBridgeState = function (s) {
-  if (mode !== 'bridge') return;
-  if (!s) return;
-  let d = s;
-  if (typeof s === 'string') { try { d = JSON.parse(s); } catch (e) { return; } }
-  if (d.e) { stopEmbedClock(); autoNext(); return; }
-  setReels(!d.p);
-  embedPos = Math.floor(d.t || 0);
-};
-
-function fbLoad(id) {
-  if (HAS_BRIDGE) {
-    mode = 'bridge';
-    debug('Bridge WebView: cargando YouTube...');
-    Android.playYT(id);
-    startEmbedClock();
-    try { Android.startForegroundSvc(); } catch (e) {}
-  } else {
-    mode = 'embed';
-    embedLoad(id, true);
-  }
-  setLed(mode);
-  setReels(true);
-}
-function fbPlay()  { if (mode === 'bridge') Android.resumeYT(); else { embedCmd('unMute'); embedCmd('playVideo'); } }
-function fbPause() { if (mode === 'bridge') Android.pauseYT(); else embedCmd('pauseVideo'); setReels(false); stopEmbedClock(); }
-function fbStop()  { if (mode === 'bridge') Android.stopYT(); else embedCmd('stopVideo'); setReels(false); stopEmbedClock(); }
-function fbSeek(s) { if (mode === 'bridge') Android.seekYT(s); else { embedPos = s; embedCmd('seekTo', [s, true]); } }
-function fbUnmute(){ if (mode === 'bridge') Android.unmuteYT(); else { embedCmd('unMute'); embedCmd('setVolume', [100]); } }
-
-soundFab.onclick = () => {
-  if (mode === 'bridge' || mode === 'embed') {
-    fbUnmute(); fbPlay(); setReels(true);
-  }
-  else if (mode === 'stream') { audio.play().catch(() => {}); }
-  soundFab.classList.remove('show');
-};
-
-function ensureEmbed() {
-  if (embedFrame) return embedFrame;
-  const f = document.createElement('iframe');
-  f.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0.01;pointer-events:none;border:0;';
-  f.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
-  document.body.appendChild(f);
-  embedFrame = f;
-  f.addEventListener('load', () => {
-    setTimeout(() => {
-      embedCmd('addEventListener', ['onStateChange']);
-      embedCmd('unMute');
-      embedCmd('setVolume', [100]);
-    }, 300);
-  });
-  return f;
-}
-function embedCmd(func, args) {
-  if (!embedFrame || !embedFrame.contentWindow) return;
-  try {
-    embedFrame.contentWindow.postMessage(
-      JSON.stringify({ event: 'command', func: func, args: args || [] }), '*');
-  } catch (e) {}
-}
-function embedLoad(id, autoplay) {
-  const f = ensureEmbed();
-  embedPos = 0;
-  f.src = 'https://www.youtube.com/embed/' + id +
-    '?enablejsapi=1&playsinline=1&rel=0&mute=0' + (autoplay ? '&autoplay=1' : '');
-  if (autoplay) startEmbedClock();
-}
-function startEmbedClock() {
-  stopEmbedClock();
-  embedTimer = setInterval(() => { embedPos++; }, 1000);
-}
-function stopEmbedClock() {
-  if (embedTimer) { clearInterval(embedTimer); embedTimer = null; }
-}
-
-window.addEventListener('message', e => {
-  if (mode !== 'embed' || typeof e.data !== 'string') return;
-  try {
-    const d = JSON.parse(e.data);
-    const st = d?.info?.playerState;
-    if (st === undefined) return;
-    if (st === 1) { setReels(true); startEmbedClock(); embedCmd('unMute'); }
-    if (st === 2) { setReels(false); stopEmbedClock(); }
-    if (st === 0) { stopEmbedClock(); autoNext(); }
-    if (d?.info?.currentTime) embedPos = Math.floor(d.info.currentTime);
-  } catch (err) {}
-});
-
+/* ============ LISTAS VIVAS ============ */
 let listsPromise = null;
 function loadLists() {
   if (listsPromise) return listsPromise;
@@ -1374,6 +1310,7 @@ function loadLists() {
   return listsPromise;
 }
 
+/* ============ NATIVA WEB ============ */
 const YT_CLIENTS = [
   { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30,
     userAgent: 'com.google.android.youtube/19.09.37 (Linux; U; Android 11; en_US) gzip' },
@@ -1417,6 +1354,7 @@ async function youtubeNativeStream(id) {
   return null;
 }
 
+/* ============ COVER HQ ============ */
 async function bestCoverCandidates(id, title) {
   const urls = [];
   try {
@@ -1473,6 +1411,7 @@ async function enrichMeta(id, fallbackTitle) {
   return { title: finalTitle, author: finalAuthor };
 }
 
+/* ============ BÚSQUEDA ============ */
 async function pipedSearch(q) {
   const { piped } = await loadLists();
   for (const base of piped.slice(0, 3)) {
@@ -1575,6 +1514,7 @@ async function searchMusic(q) {
   }
 }
 
+/* ============ STREAMS WEB ============ */
 function pickFormats(j, id) {
   if (!j) return null;
   const thumb = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
@@ -1637,14 +1577,27 @@ function raceStreams(id, ms) {
   ).catch(() => null);
 }
 
+/* ============ REPRODUCCIÓN ============ */
 function startStream(url, title, src) {
   soundFab.classList.remove('show');
+  const displayName = (src && src.title) || title || 'Mix.Casete';
+
+  // ANDROID: audio nativo en el servicio (funciona en background y pantalla bloqueada)
+  if (HAS_BRIDGE) {
+    mode = 'native';
+    setLed('native');
+    setRealTitle(displayName);
+    if (src && src.author) setArtist(src.author);
+    try { Android.nativePlay(url, displayName); } catch (e) { debug('nativePlay error'); }
+    return;
+  }
+
+  // ESCRITORIO: <audio> HTML normal
   audio.src = url;
   audio.volume = 1.0;
   mode = 'stream'; setLed('stream');
-  setRealTitle(title || (src && src.title));
+  setRealTitle(displayName);
   if (src && src.author) setArtist(src.author);
-  if (HAS_BRIDGE) { try { Android.startForegroundSvc(); } catch (e) {} }
   audio.play().then(() => {
     debug('🔊 SONANDO');
   }).catch(() => {
@@ -1668,6 +1621,7 @@ async function playById(id, title, thumb, author) {
   } else if (thumb) { albumImg.src = thumb; }
   setCoverHQ(id, title || (c && c.title) || '');
 
+  /* 1) archivo LOCAL descargado (offline) */
   const localItem = playlist.find(t => t.id === id);
   if (localItem && localItem.local) {
     debug('Reproduciendo desde almacenamiento local 💾');
@@ -1675,12 +1629,14 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
+  /* 2) cache fresco */
   if (c && c.s && Date.now() - (c.t || 0) < STREAM_TTL) {
     debug('Stream desde cache');
     startStream(c.s, c.title || title, c);
     return;
   }
 
+  /* 3) extracción NATIVA Java */
   if (HAS_BRIDGE) {
     debug('Java: extrayendo audio de YouTube...');
     const s = await bridgeGetStream(id);
@@ -1692,6 +1648,7 @@ async function playById(id, title, thumb, author) {
     }
   }
 
+  /* 4) carrera web */
   debug('Buscando stream web...');
   const src = await raceStreams(id, 12000);
   if (my !== playToken) return;
@@ -1701,33 +1658,10 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  debug('Sin stream → reproductor de fondo');
-  fbLoad(id);
-  setTimeout(() => { if (my === playToken && (mode === 'bridge' || mode === 'embed')) soundFab.classList.add('show'); }, 3500);
-  enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
+  /* 5) sin stream disponible */
+  debug('Sin stream disponible');
+  flashTitle('⚠ No se pudo obtener audio');
 }
-
-function ensureYT(cb) {
-  if (ytReady && ytPlayer) { cb(); return; }
-  ytQueue = cb;
-  if (!window.YT) {
-    const s = document.createElement('script');
-    s.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(s);
-  }
-}
-window.onYouTubeIframeAPIReady = function () {
-  ytPlayer = new YT.Player('ytMount', {
-    width: '1', height: '1',
-    events: {
-      onReady: () => { ytReady = true; if (ytQueue) { ytQueue(); ytQueue = null; } },
-      onStateChange: ev => {
-        setReels(ev.data === YT.PlayerState.PLAYING);
-        if (ev.data === YT.PlayerState.ENDED) autoNext();
-      }
-    }
-  });
-};
 
 function autoNext() {
   setReels(false);
@@ -1738,36 +1672,41 @@ function autoNext() {
   } else { setLed('none'); showTitle('⏹ Fin de la cinta'); }
 }
 
+/* ============ CONTROLES ============ */
 function doPlay() {
-  if (mode === 'stream') {
+  if (mode === 'native') {
+    try { Android.nativeResume(); } catch (e) {}
+  } else if (mode === 'stream') {
     audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo'));
   }
-  else if (mode === 'bridge' || mode === 'embed') {
-    fbPlay(); setReels(true); startEmbedClock();
-    soundFab.classList.remove('show');
-  }
-  else if (mode === 'iframe') ytPlayer && ytPlayer.playVideo();
+  setReels(true);
+  soundFab.classList.remove('show');
 }
 function doPause() {
-  if (mode === 'stream') audio.pause();
-  else if (mode === 'bridge' || mode === 'embed') fbPause();
-  else if (mode === 'iframe') ytPlayer && ytPlayer.pauseVideo();
+  if (mode === 'native') {
+    try { Android.nativePause(); } catch (e) {}
+  } else if (mode === 'stream') {
+    audio.pause();
+  }
+  setReels(false);
 }
 function doStop() {
-  if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
-  else if (mode === 'bridge' || mode === 'embed') fbStop();
-  else if (mode === 'iframe') ytPlayer && ytPlayer.stopVideo();
-  if (HAS_BRIDGE) { try { Android.stopForegroundSvc(); } catch (e) {} }
+  if (mode === 'native') {
+    try { Android.nativeStop(); } catch (e) {}
+  } else if (mode === 'stream') {
+    audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%';
+  }
   setReels(false);
   soundFab.classList.remove('show');
 }
 function doSeek(delta) {
-  if (mode === 'stream') {
+  if (mode === 'native') {
+    try {
+      const cur = Math.floor(audio.currentTime || 0);
+      Android.nativeSeek(Math.max(0, cur + delta));
+    } catch (e) {}
+  } else if (mode === 'stream') {
     audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + delta));
-  } else if (mode === 'bridge' || mode === 'embed') {
-    fbSeek(Math.max(0, embedPos + delta));
-  } else if (mode === 'iframe' && ytPlayer && ytPlayer.getCurrentTime) {
-    ytPlayer.seekTo(Math.max(0, ytPlayer.getCurrentTime() + delta), true);
   }
 }
 
@@ -1785,9 +1724,10 @@ document.querySelectorAll('.piano-btn').forEach(btn => {
   });
 });
 
-audio.addEventListener('play',    () => setReels(true));
-audio.addEventListener('playing', () => { setReels(true); debug('🔊 SONANDO'); });
-audio.addEventListener('pause',   () => setReels(false));
+/* ============ CINTA VIVA (solo escritorio, Android usa onNativePlayerEvent) ============ */
+audio.addEventListener('play',    () => { if (mode === 'stream') setReels(true); });
+audio.addEventListener('playing', () => { if (mode === 'stream') { setReels(true); debug('🔊 SONANDO'); } });
+audio.addEventListener('pause',   () => { if (mode === 'stream') setReels(false); });
 audio.addEventListener('waiting', () => debug('⏳ buffer...'));
 audio.addEventListener('timeupdate', () => {
   if (audio.duration) {
@@ -1808,6 +1748,17 @@ audio.addEventListener('error', () => {
   }
 });
 
+soundFab.onclick = () => {
+  if (mode === 'native') {
+    try { Android.nativeResume(); } catch (e) {}
+    setReels(true);
+  } else if (mode === 'stream') {
+    audio.play().catch(() => {});
+  }
+  soundFab.classList.remove('show');
+};
+
+/* ============ OVERLAY BÚSQUEDA ============ */
 const overlay = document.getElementById('searchOverlay');
 document.getElementById('searchOpen').onclick = () => overlay.classList.add('open');
 overlay.onclick = e => { if (e.target === overlay) overlay.classList.remove('open'); };
@@ -1829,6 +1780,7 @@ document.getElementById('urlInput').addEventListener('keypress', e => {
   if (e.key === 'Enter') document.getElementById('urlGo').click();
 });
 
+/* ============ INIT ============ */
 updatePlBar();
 renderPL();
 if (HAS_BRIDGE && !playlist.length) {
