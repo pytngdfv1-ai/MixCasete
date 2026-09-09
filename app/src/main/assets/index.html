@@ -955,6 +955,8 @@ const themeToggle = document.getElementById('themeToggle');
 let mode = 'none';
 let current = { id: null, title: '', author: '', thumb: '' };
 let playToken = 0;
+let embedPos = 0;
+let nativePos = 0, nativeClock = null;
 
 /* ============ 🌙 TEMA CLARO / OSCURO (persistente) ============ */
 function applyTheme(dark) {
@@ -969,20 +971,58 @@ themeToggle.onclick = () => applyTheme(!document.body.classList.contains('dark')
   applyTheme(saved === 'dark');
 })();
 
-/* ============ 🎵 REPRODUCTOR NATIVO (Android) ============ */
-window.onNativePlayerEvent = function(event) {
+/* ============ RELOJES DE POSICIÓN ============ */
+function startNativeClock() {
+  stopNativeClock();
+  nativeClock = setInterval(() => { nativePos++; }, 1000);
+}
+function stopNativeClock() {
+  if (nativeClock) { clearInterval(nativeClock); nativeClock = null; }
+}
+
+/* ============ 🎵 EVENTOS DEL REPRODUCTOR NATIVO (Android) ============ */
+window.onNativePlayerEvent = function (event) {
   if (event === 'playing') {
     setReels(true);
+    startNativeClock();
     debug('🔊 SONANDO (nativo)');
   } else if (event === 'paused') {
     setReels(false);
+    stopNativeClock();
   } else if (event === 'ended') {
     setReels(false);
+    stopNativeClock();
     autoNext();
   } else if (event === 'error') {
     debug('⚠ Error de audio nativo');
     setReels(false);
+    stopNativeClock();
   }
+};
+
+/* ============ 📼 RESPALDO: WebView oculto (audio en primer plano) ============ */
+function fbLoad(id) {
+  if (HAS_BRIDGE) {
+    mode = 'bridge';
+    setLed('bridge');
+    embedPos = 0;
+    try { Android.playYT(id); } catch (e) {}
+    setReels(true);
+  }
+}
+function fbPlay()  { if (mode === 'bridge') { try { Android.resumeYT(); } catch (e) {} } }
+function fbPause() { if (mode === 'bridge') { try { Android.pauseYT(); } catch (e) {} } setReels(false); }
+function fbStop()  { if (mode === 'bridge') { try { Android.stopYT(); } catch (e) {} } setReels(false); }
+function fbSeek(s) { if (mode === 'bridge') { try { Android.seekYT(s); } catch (e) {} } }
+
+window.onBridgeState = function (s) {
+  if (mode !== 'bridge') return;
+  if (!s) return;
+  let d = s;
+  if (typeof s === 'string') { try { d = JSON.parse(s); } catch (e) { return; } }
+  if (d.e) { setReels(false); autoNext(); return; }
+  setReels(!d.p);
+  embedPos = Math.floor(d.t || 0);
 };
 
 /* ============ STREAM VÍA JAVA ============ */
@@ -1274,7 +1314,7 @@ function setReels(on) {
   reelR.classList.toggle('playing', on);
 }
 function setLed(m) {
-  modeLed.className = 'led' + (m === 'stream' || m === 'native' ? ' ' + m : (m === 'iframe' || m === 'embed' || m === 'bridge') ? ' iframe' : '');
+  modeLed.className = 'led' + (m === 'stream' ? ' stream' : m === 'native' ? ' native' : (m === 'iframe' || m === 'embed' || m === 'bridge') ? ' bridge' : '');
 }
 function extractVideoId(str) {
   str = (str || '').trim();
@@ -1582,12 +1622,13 @@ function startStream(url, title, src) {
   soundFab.classList.remove('show');
   const displayName = (src && src.title) || title || 'Mix.Casete';
 
-  // ANDROID: audio nativo en el servicio (funciona en background y pantalla bloqueada)
+  // ANDROID: audio nativo en el servicio (segundo plano + pantalla bloqueada)
   if (HAS_BRIDGE) {
     mode = 'native';
     setLed('native');
     setRealTitle(displayName);
     if (src && src.author) setArtist(src.author);
+    nativePos = 0;
     try { Android.nativePlay(url, displayName); } catch (e) { debug('nativePlay error'); }
     return;
   }
@@ -1636,7 +1677,7 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 3) extracción NATIVA Java */
+  /* 3) extracción NATIVA Java → MediaPlayer (segundo plano) */
   if (HAS_BRIDGE) {
     debug('Java: extrayendo audio de YouTube...');
     const s = await bridgeGetStream(id);
@@ -1658,9 +1699,10 @@ async function playById(id, title, thumb, author) {
     return;
   }
 
-  /* 5) sin stream disponible */
-  debug('Sin stream disponible');
-  flashTitle('⚠ No se pudo obtener audio');
+  /* 5) respaldo: WebView oculto con la watch page (audio en primer plano) */
+  debug('Sin stream → WebView de respaldo');
+  fbLoad(id);
+  enrichMeta(id, title).then(meta => { if (my === playToken) setArtist(meta.author || author); });
 }
 
 function autoNext() {
@@ -1674,38 +1716,35 @@ function autoNext() {
 
 /* ============ CONTROLES ============ */
 function doPlay() {
-  if (mode === 'native') {
-    try { Android.nativeResume(); } catch (e) {}
-  } else if (mode === 'stream') {
-    audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo'));
-  }
+  if (mode === 'native') { try { Android.nativeResume(); } catch (e) {} startNativeClock(); }
+  else if (mode === 'bridge') { fbPlay(); }
+  else if (mode === 'stream') { audio.play().catch(() => flashTitle('🔊 Pulsa ▶ de nuevo')); }
   setReels(true);
   soundFab.classList.remove('show');
 }
 function doPause() {
-  if (mode === 'native') {
-    try { Android.nativePause(); } catch (e) {}
-  } else if (mode === 'stream') {
-    audio.pause();
-  }
+  if (mode === 'native') { try { Android.nativePause(); } catch (e) {} stopNativeClock(); }
+  else if (mode === 'bridge') { fbPause(); }
+  else if (mode === 'stream') { audio.pause(); }
   setReels(false);
 }
 function doStop() {
-  if (mode === 'native') {
-    try { Android.nativeStop(); } catch (e) {}
-  } else if (mode === 'stream') {
-    audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%';
-  }
+  if (mode === 'native') { try { Android.nativeStop(); } catch (e) {} stopNativeClock(); nativePos = 0; }
+  else if (mode === 'bridge') { fbStop(); embedPos = 0; }
+  else if (mode === 'stream') { audio.pause(); audio.currentTime = 0; tapePack.style.width = '42%'; }
   setReels(false);
   soundFab.classList.remove('show');
 }
 function doSeek(delta) {
   if (mode === 'native') {
-    try {
-      const cur = Math.floor(audio.currentTime || 0);
-      Android.nativeSeek(Math.max(0, cur + delta));
-    } catch (e) {}
-  } else if (mode === 'stream') {
+    nativePos = Math.max(0, nativePos + delta);
+    try { Android.nativeSeek(nativePos); } catch (e) {}
+  }
+  else if (mode === 'bridge') {
+    embedPos = Math.max(0, embedPos + delta);
+    fbSeek(embedPos);
+  }
+  else if (mode === 'stream') {
     audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + delta));
   }
 }
@@ -1724,7 +1763,7 @@ document.querySelectorAll('.piano-btn').forEach(btn => {
   });
 });
 
-/* ============ CINTA VIVA (solo escritorio, Android usa onNativePlayerEvent) ============ */
+/* ============ CINTA VIVA (escritorio) ============ */
 audio.addEventListener('play',    () => { if (mode === 'stream') setReels(true); });
 audio.addEventListener('playing', () => { if (mode === 'stream') { setReels(true); debug('🔊 SONANDO'); } });
 audio.addEventListener('pause',   () => { if (mode === 'stream') setReels(false); });
@@ -1748,13 +1787,11 @@ audio.addEventListener('error', () => {
   }
 });
 
+/* ============ BOTÓN 🔊 ============ */
 soundFab.onclick = () => {
-  if (mode === 'native') {
-    try { Android.nativeResume(); } catch (e) {}
-    setReels(true);
-  } else if (mode === 'stream') {
-    audio.play().catch(() => {});
-  }
+  if (mode === 'native') { try { Android.nativeResume(); } catch (e) {} startNativeClock(); setReels(true); }
+  else if (mode === 'bridge') { try { Android.unmuteYT(); Android.resumeYT(); } catch (e) {} setReels(true); }
+  else if (mode === 'stream') { audio.play().catch(() => {}); }
   soundFab.classList.remove('show');
 };
 
